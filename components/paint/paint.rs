@@ -272,19 +272,29 @@ impl Paint {
         }
 
         let painter = Painter::new(rendering_context.clone(), self);
-        let connection = rendering_context
-            .connection()
-            .expect("Failed to get connection");
-        let adapter = connection
-            .create_adapter()
-            .expect("Failed to create adapter");
-
-        let painter_surfman_details = PainterSurfmanDetails {
-            connection,
-            adapter,
-        };
-        self.painter_surfman_details_map
-            .insert(painter.painter_id, painter_surfman_details);
+        // retsurf patch: the surfman connection is only needed for WebGL/WebGPU
+        // external images. On EGL 1.4 devices (e.g. Mali on Knulli/muOS/ROCKNIX)
+        // surfman can't create a connection (`eglGetPlatformDisplay` is EGL 1.5),
+        // so treat it as optional instead of `.expect()`-ing. WebGL is disabled
+        // when absent; everything else renders normally.
+        if let Some(connection) = rendering_context.connection() {
+            match connection.create_adapter() {
+                Ok(adapter) => {
+                    self.painter_surfman_details_map.insert(
+                        painter.painter_id,
+                        PainterSurfmanDetails {
+                            connection,
+                            adapter,
+                        },
+                    );
+                },
+                // Connection succeeded but no usable adapter — WebGL stays off and
+                // the page still renders. Seen on some Android GPUs; log so a
+                // connects-but-can't-adapt device is diagnosable.
+                // `log::warn!` spelled out: the `warn` import is `webgl`-gated upstream.
+                Err(e) => log::warn!("surfman connection has no adapter; WebGL disabled: {e:?}"),
+            }
+        }
 
         let painter_id = painter.painter_id;
         self.painters.push(Rc::new(RefCell::new(painter)));
