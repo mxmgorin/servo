@@ -557,10 +557,12 @@ impl PainterSurfmanDetailsMap {
         assert!(existing.is_none())
     }
 
+    /// retsurf patch: no entry is the normal state for a painter whose
+    /// rendering context had no surfman connection to register (see
+    /// `Paint::register_rendering_context`), so removal cannot assert one.
     pub fn remove(&self, painter_id: PainterId) {
         let mut map = self.0.lock().expect("poisoned");
-        let details = map.remove(&painter_id);
-        assert!(details.is_some());
+        map.remove(&painter_id);
     }
 }
 
