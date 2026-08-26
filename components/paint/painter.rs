@@ -201,13 +201,16 @@ impl Painter {
             clear_color[3] as f32,
         );
 
+        let renderer_name = webrender_gl.get_string(RENDERER);
         // Use same texture upload method as Gecko with ANGLE:
         // https://searchfox.org/mozilla-central/source/gfx/webrender_bindings/src/bindings.rs#1215-1219
-        let upload_method = if webrender_gl.get_string(RENDERER).starts_with("ANGLE") {
+        let upload_method = if renderer_name.starts_with("ANGLE") {
             UploadMethod::Immediate
         } else {
             UploadMethod::PixelBuffer(ONE_TIME_USAGE_HINT)
         };
+        // The same name WebRender itself matches on to select its software paths.
+        let is_software_webrender = renderer_name.starts_with("Software WebRender");
         let worker_threads = std::thread::available_parallelism()
             .map(|i| i.get())
             .unwrap_or(pref!(thread_pool_fallback_workers) as usize)
@@ -246,7 +249,13 @@ impl Painter {
                 enable_aa: pref!(gfx_text_antialiasing_enabled),
                 enable_subpixel_aa: pref!(gfx_subpixel_text_antialiasing_enabled),
                 allow_texture_swizzling: pref!(gfx_texture_swizzling_enabled),
-                enable_dithering: true,
+                // swgl builds no dithered variant of the gradient shader, so
+                // asking for one leaves WebRender with no program to bind.
+                enable_dithering: !is_software_webrender,
+                // Clearing picture-cache tiles by drawing a quad is a driver
+                // workaround (Mali-T crashes on glClear); it needs a depth func
+                // of GL_ALWAYS, which swgl does not implement.
+                clear_caches_with_quads: !is_software_webrender,
                 clear_color,
                 upload_method,
                 workers,
