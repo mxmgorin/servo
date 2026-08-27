@@ -370,7 +370,11 @@ impl QueuedTaskConversion for MainThreadScriptMsg {
 
 impl OpaqueSender<CommonScriptMsg> for ScriptEventLoopSender {
     fn send(&self, message: CommonScriptMsg) {
-        self.send(message).unwrap()
+        // A script event loop that is already gone cannot be told anything, and
+        // an embedder built with `panic = "abort"` dies of the unwrap.
+        if self.send(message).is_err() {
+            log::warn!("dropping a script message: its event loop is gone");
+        }
     }
 }
 
