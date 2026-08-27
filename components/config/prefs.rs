@@ -291,7 +291,14 @@ pub struct Preferences {
     pub js_mem_gc_incremental_enabled: bool,
     pub js_mem_gc_incremental_slice_ms: i64,
     pub js_mem_gc_low_frequency_heap_growth: i64,
+    /// Malloc'd bytes (MB) SpiderMonkey holds before a collection is triggered by
+    /// them. `js_mem_max` bounds the GC heap only, and on a small device the
+    /// malloc heap is the larger half. `0` keeps SpiderMonkey's own default.
+    pub js_mem_gc_malloc_threshold_mb: i64,
     pub js_mem_gc_per_zone_enabled: bool,
+    /// Malloc'd bytes (MB) past which a collection becomes urgent. `0` keeps
+    /// SpiderMonkey's own default.
+    pub js_mem_gc_urgent_threshold_mb: i64,
     pub js_mem_gc_zeal_frequency: i64,
     pub js_mem_gc_zeal_level: i64,
     pub js_mem_max: i64,
@@ -545,7 +552,9 @@ impl Preferences {
             js_mem_gc_incremental_enabled: false,
             js_mem_gc_incremental_slice_ms: 10,
             js_mem_gc_low_frequency_heap_growth: 150,
+            js_mem_gc_malloc_threshold_mb: 0,
             js_mem_gc_per_zone_enabled: false,
+            js_mem_gc_urgent_threshold_mb: 0,
             js_mem_gc_zeal_frequency: 100,
             js_mem_gc_zeal_level: 0,
             js_mem_max: -1,
