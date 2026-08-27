@@ -207,10 +207,16 @@ impl WebViewRenderer {
             .or_insert_with(PipelineDetails::new)
     }
 
-    pub(crate) fn pipeline_exited(&mut self, pipeline_id: PipelineId, source: PipelineExitSource) {
+    /// Returns whether this left the pipeline gone, so its caller can take the
+    /// display list out of the WebRender scene as well.
+    pub(crate) fn pipeline_exited(
+        &mut self,
+        pipeline_id: PipelineId,
+        source: PipelineExitSource,
+    ) -> bool {
         let pipeline = self.pipelines.entry(pipeline_id);
         let Entry::Occupied(mut pipeline) = pipeline else {
-            return;
+            return false;
         };
 
         pipeline.get_mut().exited.insert(source);
@@ -219,13 +225,14 @@ impl WebViewRenderer {
         // finished processing the pipeline shutdown. This prevents any followup messges
         // from re-adding the pipeline details and creating a zombie.
         if !pipeline.get().exited.is_all() {
-            return;
+            return false;
         }
 
         // Flush the LCP candidates when exiting pipeline.
         pipeline.get_mut().lcp_candidates.clear();
 
         pipeline.remove_entry();
+        true
     }
 
     pub(crate) fn set_frame_tree(&mut self, frame_tree: &SendableFrameTree) {

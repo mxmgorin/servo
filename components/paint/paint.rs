@@ -452,7 +452,10 @@ impl Paint {
             },
             PaintMessage::PipelineExited(webview_id, pipeline_id, pipeline_exit_source) => {
                 if let Some(mut painter) = self.maybe_painter_mut(webview_id.into()) {
-                    painter.notify_pipeline_exited(webview_id, pipeline_id, pipeline_exit_source);
+                    if painter.notify_pipeline_exited(webview_id, pipeline_id, pipeline_exit_source)
+                    {
+                        painter.remove_pipeline_display_list(pipeline_id);
+                    }
                 }
             },
             PaintMessage::NewWebRenderFrameReady(..) => {

@@ -836,16 +836,26 @@ impl Painter {
         }
     }
 
+    /// Returns whether the pipeline is now gone, in which case its display list
+    /// should leave the scene too (see [`Self::remove_pipeline_display_list`]).
     pub(crate) fn notify_pipeline_exited(
         &mut self,
         webview_id: WebViewId,
         pipeline_id: PipelineId,
         pipeline_exit_source: PipelineExitSource,
-    ) {
+    ) -> bool {
         debug!("Paint got pipeline exited: {webview_id:?} {pipeline_id:?}",);
-        if let Some(webview_renderer) = self.webview_renderers.get_mut(&webview_id) {
-            webview_renderer.pipeline_exited(pipeline_id, pipeline_exit_source);
-        }
+        self.webview_renderers
+            .get_mut(&webview_id)
+            .is_some_and(|renderer| renderer.pipeline_exited(pipeline_id, pipeline_exit_source))
+    }
+
+    /// Take a gone pipeline's display list out of the WebRender scene. Nothing
+    /// else does, so every navigation would leave one behind for good.
+    pub(crate) fn remove_pipeline_display_list(&mut self, pipeline_id: PipelineId) {
+        let mut transaction = Transaction::new();
+        transaction.remove_pipeline(pipeline_id.into());
+        self.send_transaction(transaction);
     }
 
     pub(crate) fn send_initial_pipeline_transaction(
@@ -1218,10 +1228,18 @@ impl Painter {
     }
 
     pub(crate) fn remove_webview(&mut self, webview_id: WebViewId) {
-        if self.webview_renderers.remove(&webview_id).is_none() {
+        let Some(webview_renderer) = self.webview_renderers.remove(&webview_id) else {
             warn!("Tried removing unknown WebView: {webview_id:?}");
             return;
         };
+
+        // A pipeline this WebView still had never gets its own exit message here,
+        // so its display list would stay in the scene.
+        let mut transaction = Transaction::new();
+        for pipeline_id in webview_renderer.pipelines.keys() {
+            transaction.remove_pipeline(pipeline_id.into());
+        }
+        self.send_transaction(transaction);
 
         self.send_root_pipeline_display_list();
     }
