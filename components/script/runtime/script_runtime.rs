@@ -831,6 +831,14 @@ impl Runtime {
             if let Some(val) = in_range(pref!(js_mem_gc_empty_chunk_count_min), 0, 10_000) {
                 JS_SetGCParameter(cx, JSGCParamKey::JSGC_MIN_EMPTY_CHUNK_COUNT, val as u32);
             }
+            // The malloc heap is the half `js_mem_max` does not bound, and its
+            // default threshold (38 MB) is a desktop's.
+            if let Some(val) = in_range(pref!(js_mem_gc_malloc_threshold_mb), 1, 10_000) {
+                JS_SetGCParameter(cx, JSGCParamKey::JSGC_MALLOC_THRESHOLD_BASE, val as u32);
+            }
+            if let Some(val) = in_range(pref!(js_mem_gc_urgent_threshold_mb), 1, 10_000) {
+                JS_SetGCParameter(cx, JSGCParamKey::JSGC_URGENT_THRESHOLD_MB, val as u32);
+            }
         }
         Runtime {
             rt: runtime,
