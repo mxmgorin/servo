@@ -996,6 +996,20 @@ impl Document {
         &self.window
     }
 
+    /// Let go of the handles Rust keeps into this document's realm. Callbacks and
+    /// promises are unconditional GC roots, so one left behind keeps the whole
+    /// document alive for the life of the process.
+    pub(crate) fn release_rooted_handles(&self) {
+        for node in self.upcast::<Node>().traverse_preorder(ShadowIncluding::Yes) {
+            node.upcast::<EventTarget>().remove_all_listeners();
+        }
+        if let Some(fonts) = self.fonts.get() {
+            fonts.upcast::<EventTarget>().remove_all_listeners();
+            fonts.release_ready_promise();
+        }
+        self.window.upcast::<EventTarget>().remove_all_listeners();
+    }
+
     #[inline]
     pub(crate) fn is_html_document(&self) -> bool {
         self.is_html_document
