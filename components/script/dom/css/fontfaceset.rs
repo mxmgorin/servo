@@ -53,7 +53,7 @@ pub(crate) struct FontFaceSet {
 
     /// <https://drafts.csswg.org/css-font-loading/#dom-fontfaceset-readypromise-slot>
     #[conditional_malloc_size_of]
-    promise: RefCell<Rc<Promise>>,
+    promise: RefCell<Option<Rc<Promise>>>,
 
     set_entries: DomRefCell<Vec<Dom<FontFace>>>,
 }
@@ -62,7 +62,7 @@ impl FontFaceSet {
     fn new_inherited(promise: Rc<Promise>) -> Self {
         FontFaceSet {
             target: EventTarget::new_inherited(),
-            promise: promise.into(),
+            promise: RefCell::new(Some(promise)),
             set_entries: Default::default(),
         }
     }
@@ -103,9 +103,23 @@ impl FontFaceSet {
         }
     }
 
+    fn ready_promise_is_fulfilled(&self) -> bool {
+        self.promise
+            .borrow()
+            .as_ref()
+            .is_some_and(|promise| promise.is_fulfilled())
+    }
+
+    /// A `Rc<Promise>` is an unconditional GC root, so a dying document must let go of it.
+    pub(crate) fn release_ready_promise(&self) {
+        self.promise.borrow_mut().take();
+    }
+
     /// Fulfill the font ready promise, returning true if it was not already fulfilled beforehand.
     pub(crate) fn fulfill_ready_promise_if_needed(&self, cx: &mut JSContext) -> bool {
-        let promise = self.promise.borrow().clone();
+        let Some(promise) = self.promise.borrow().clone() else {
+            return false;
+        };
         if promise.is_fulfilled() {
             return false;
         }
@@ -114,7 +128,10 @@ impl FontFaceSet {
     }
 
     pub(crate) fn waiting_to_fullfill_promise(&self) -> bool {
-        !self.promise.borrow().is_fulfilled()
+        self.promise
+            .borrow()
+            .as_ref()
+            .is_some_and(|promise| !promise.is_fulfilled())
     }
 
     fn contains_face(&self, target: &FontFace) -> bool {
@@ -144,8 +161,8 @@ impl FontFaceSet {
 
         // Step 3. If font face set’s [[ReadyPromise]] slot currently holds a fulfilled
         // promise, replace it with a fresh pending promise.
-        if self.promise.borrow().is_fulfilled() {
-            *self.promise.borrow_mut() = Promise::new(cx, &self.global());
+        if self.ready_promise_is_fulfilled() {
+            *self.promise.borrow_mut() = Some(Promise::new(cx, &self.global()));
         }
 
         // Step 4. Queue a task to fire a font load event named loading at font face set.
@@ -279,12 +296,13 @@ impl FontFaceSet {
 impl FontFaceSetMethods<crate::DomTypeHolder> for FontFaceSet {
     /// <https://drafts.csswg.org/css-font-loading/#dom-fontfaceset-ready>
     fn Ready(&self, cx: &mut JSContext) -> Rc<Promise> {
-        if self.promise.borrow().is_fulfilled() {
+        if self.ready_promise_is_fulfilled() {
             // There may be pending style changes that cause new web fonts to start loading,
             // re-initializing document.fonts.ready.
             self.flush_author_font_set(cx);
         }
-        self.promise.borrow().clone()
+        let promise = self.promise.borrow().clone();
+        promise.unwrap_or_else(|| Promise::new(cx, &self.global()))
     }
 
     /// <https://drafts.csswg.org/css-font-loading/#dom-fontfaceset-add>
