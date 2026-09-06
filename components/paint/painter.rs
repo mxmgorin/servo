@@ -1240,10 +1240,18 @@ impl Painter {
     }
 
     pub(crate) fn remove_webview(&mut self, webview_id: WebViewId) {
-        if self.webview_renderers.remove(&webview_id).is_none() {
+        let Some(webview_renderer) = self.webview_renderers.remove(&webview_id) else {
             warn!("Tried removing unknown WebView: {webview_id:?}");
             return;
         };
+
+        // A pipeline this WebView still had never gets its own exit message here,
+        // so its display list would stay in the scene.
+        let mut transaction = Transaction::new();
+        for pipeline_id in webview_renderer.pipelines.keys() {
+            transaction.remove_pipeline(pipeline_id.into());
+        }
+        self.send_transaction(transaction);
 
         self.send_root_pipeline_display_list();
     }
