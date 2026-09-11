@@ -65,12 +65,13 @@ pub trait RenderingContext {
     /// Returns the OpenGL or GLES API.
     fn glow_gl_api(&self) -> Arc<glow::Context>;
     /// Creates a texture from a given surface and returns the surface texture,
-    /// the OpenGL texture object, and the size of the surface. Default to `None`.
+    /// the OpenGL texture object, and the size of the surface. Hand the surface
+    /// back when that cannot be done: dropping one panics inside surfman.
     fn create_texture(
         &self,
-        _surface: Surface,
-    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
-        None
+        surface: Surface,
+    ) -> Result<(SurfaceTexture, u32, UntypedSize2D<i32>), Surface> {
+        Err(surface)
     }
     /// Destroys the texture and returns the surface. Default to `None`.
     fn destroy_texture(&self, _surface_texture: SurfaceTexture) -> Option<Surface> {
@@ -246,7 +247,7 @@ impl SurfmanRenderingContext {
     fn create_texture(
         &self,
         surface: Surface,
-    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
+    ) -> Result<(SurfaceTexture, u32, UntypedSize2D<i32>), Surface> {
         let device = &self.device.borrow();
         let context = &mut self.context.borrow_mut();
         let SurfaceInfo {
@@ -255,12 +256,18 @@ impl SurfmanRenderingContext {
             ..
         } = device.surface_info(&surface);
         debug!("... getting texture for surface {:?}", front_buffer_id);
-        let surface_texture = device.create_surface_texture(context, surface).unwrap();
+        let surface_texture = match device.create_surface_texture(context, surface) {
+            Ok(surface_texture) => surface_texture,
+            Err((error, surface)) => {
+                warn!("Failed to create a surface texture: {error:?}");
+                return Err(surface);
+            },
+        };
         let gl_texture = device
             .surface_texture_object(&surface_texture)
             .map(|tex| tex.0.get())
             .unwrap_or(0);
-        Some((surface_texture, gl_texture, size))
+        Ok((surface_texture, gl_texture, size))
     }
 
     fn destroy_texture(&self, surface_texture: SurfaceTexture) -> Option<Surface> {
@@ -383,7 +390,7 @@ impl RenderingContext for SoftwareRenderingContext {
     fn create_texture(
         &self,
         surface: Surface,
-    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
+    ) -> Result<(SurfaceTexture, u32, UntypedSize2D<i32>), Surface> {
         self.surfman_rendering_info.create_texture(surface)
     }
 
@@ -570,7 +577,7 @@ impl RenderingContext for WindowRenderingContext {
     fn create_texture(
         &self,
         surface: Surface,
-    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
+    ) -> Result<(SurfaceTexture, u32, UntypedSize2D<i32>), Surface> {
         self.surfman_context.create_texture(surface)
     }
 
@@ -882,7 +889,7 @@ impl RenderingContext for OffscreenRenderingContext {
     fn create_texture(
         &self,
         surface: Surface,
-    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
+    ) -> Result<(SurfaceTexture, u32, UntypedSize2D<i32>), Surface> {
         self.parent_context.create_texture(surface)
     }
 
