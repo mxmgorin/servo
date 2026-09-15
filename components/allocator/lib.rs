@@ -40,6 +40,19 @@ pub struct HeapReport {
 
 pub use crate::platform::*;
 
+// FIXME: temporary diagnostics for the memory report abort; remove before landing.
+
+/// Pointers that [`usable_size`] was asked about and no heap of this process owns.
+#[cfg(windows)]
+pub fn take_foreign_pointers() -> Vec<String> {
+    crate::platform::take_foreign_pointers()
+}
+
+#[cfg(not(windows))]
+pub fn take_foreign_pointers() -> Vec<String> {
+    Vec::new()
+}
+
 type EnclosingSizeFn = unsafe extern "C" fn(*const c_void) -> usize;
 
 /// # Safety
@@ -193,31 +206,174 @@ mod platform {
 mod platform {
     pub use std::alloc::System as Allocator;
     use std::os::raw::c_void;
+    use std::sync::Mutex;
 
-    use windows_sys::Win32::Foundation::FALSE;
-    use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapSize, HeapValidate};
+    use windows_sys::Win32::Foundation::{FALSE, HANDLE};
+    use windows_sys::Win32::System::Memory::{
+        GetProcessHeap, GetProcessHeaps, HeapSize, HeapValidate, MEM_COMMIT,
+        MEMORY_BASIC_INFORMATION, PAGE_GUARD, PAGE_NOACCESS, VirtualQuery,
+    };
 
     /// Get the size of a heap block.
     ///
     /// # Safety
     ///
-    /// Passing a non-heap allocated pointer to this function results in undefined behavior.
-    pub unsafe extern "C" fn usable_size(mut ptr: *const c_void) -> usize {
+    /// No restrictions. Pointers that the process heap does not own measure as zero.
+    pub unsafe extern "C" fn usable_size(ptr: *const c_void) -> usize {
         unsafe {
             let heap = GetProcessHeap();
+            let Some(block) = process_heap_block(heap, ptr) else {
+                record_foreign_pointer(ptr);
+                return 0;
+            };
 
-            if HeapValidate(heap, 0, ptr) == FALSE {
-                ptr = *(ptr as *const *const c_void).offset(-1)
-            }
-
-            let size = HeapSize(heap, 0, ptr) as usize;
+            let size = HeapSize(heap, 0, block) as usize;
             #[cfg(feature = "allocation-tracking")]
-            crate::ALLOC.note_allocation(ptr, size);
+            crate::ALLOC.note_allocation(block, size);
             size
         }
     }
 
+    /// The process heap block backing `ptr`, if there is one. `HeapSize` trusts the
+    /// block header, so an unvalidated pointer fast-fails the whole process.
+    unsafe fn process_heap_block(heap: HANDLE, ptr: *const c_void) -> Option<*const c_void> {
+        if unsafe { HeapValidate(heap, 0, ptr) } != FALSE {
+            return Some(ptr);
+        }
+
+        // `System` over-allocates blocks aligned beyond `MIN_ALIGN` and stores the real
+        // base pointer in the word preceding the block it hands out.
+        let base_slot = unsafe { (ptr as *const *const c_void).offset(-1) };
+        if !is_readable(base_slot.cast()) {
+            return None;
+        }
+
+        let base = unsafe { *base_slot };
+        (unsafe { HeapValidate(heap, 0, base) } != FALSE).then_some(base)
+    }
+
+    /// Whether `ptr` may be dereferenced.
+    fn is_readable(ptr: *const c_void) -> bool {
+        let Some(info) = query(ptr) else {
+            return false;
+        };
+        info.State == MEM_COMMIT && info.Protect & (PAGE_NOACCESS | PAGE_GUARD) == 0
+    }
+
+    fn query(ptr: *const c_void) -> Option<MEMORY_BASIC_INFORMATION> {
+        let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+        let queried =
+            unsafe { VirtualQuery(ptr, &mut info, size_of::<MEMORY_BASIC_INFORMATION>()) };
+        (queried != 0).then_some(info)
+    }
+
+    // FIXME: temporary diagnostics for the memory report abort; remove before landing.
+
+    static FOREIGN_POINTERS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    const MAX_FOREIGN_POINTERS: usize = 32;
+    const MAX_PROCESS_HEAPS: usize = 32;
+
+    pub(crate) fn take_foreign_pointers() -> Vec<String> {
+        std::mem::take(&mut FOREIGN_POINTERS.lock().unwrap())
+    }
+
+    fn record_foreign_pointer(ptr: *const c_void) {
+        let Ok(mut recorded) = FOREIGN_POINTERS.lock() else {
+            return;
+        };
+        if recorded.len() >= MAX_FOREIGN_POINTERS {
+            return;
+        }
+
+        let owner = match owning_heap(ptr) {
+            Some(heap) => format!("heap {heap:?}"),
+            None => "no heap".to_owned(),
+        };
+        let Some(info) = query(ptr) else {
+            recorded.push(format!("{ptr:p}: unmapped, {owner}"));
+            return;
+        };
+        recorded.push(format!(
+            "{ptr:p}: base={:p} region={:#x} state={:#x} type={:#x} protect={:#x}, {owner}",
+            info.AllocationBase, info.RegionSize, info.State, info.Type, info.Protect,
+        ));
+    }
+
+    /// The heap of this process that owns `ptr`, which tells a block of some other
+    /// heap (a statically linked CRT, a DLL) apart from memory that is not heap at all.
+    fn owning_heap(ptr: *const c_void) -> Option<HANDLE> {
+        let mut heaps = [std::ptr::null_mut(); MAX_PROCESS_HEAPS];
+        let count = unsafe { GetProcessHeaps(MAX_PROCESS_HEAPS as u32, heaps.as_mut_ptr()) };
+        heaps
+            .into_iter()
+            .take(count as usize)
+            .find(|heap| unsafe { HeapValidate(*heap, 0, ptr) } != FALSE)
+    }
+
     pub fn heap_reports() -> Vec<crate::HeapReport> {
         Vec::new()
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use std::os::raw::c_void;
+
+    use windows_sys::Win32::System::Memory::{
+        MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, VirtualAlloc, VirtualFree,
+    };
+
+    static STATIC_DATA: [u8; 64] = [7; 64];
+
+    const BLOCK_SIZE: usize = 64;
+
+    #[test]
+    fn heap_block_measures_its_size() {
+        let block = Box::new([0u8; BLOCK_SIZE]);
+        let size = unsafe { crate::usable_size(block.as_ptr().cast()) };
+        assert!(size >= BLOCK_SIZE, "measured {size} bytes");
+    }
+
+    #[test]
+    fn over_aligned_heap_block_measures_its_size() {
+        #[repr(align(64))]
+        struct OverAligned([u8; BLOCK_SIZE]);
+
+        let block = Box::new(OverAligned([0; BLOCK_SIZE]));
+        let size = unsafe { crate::usable_size(block.0.as_ptr().cast()) };
+        assert!(size >= BLOCK_SIZE, "measured {size} bytes");
+    }
+
+    #[test]
+    fn static_memory_measures_zero() {
+        assert_eq!(unsafe { crate::usable_size(STATIC_DATA.as_ptr().cast()) }, 0);
+    }
+
+    #[test]
+    fn stack_memory_measures_zero() {
+        let on_stack = [0u8; BLOCK_SIZE];
+        assert_eq!(unsafe { crate::usable_size(on_stack.as_ptr().cast()) }, 0);
+    }
+
+    #[test]
+    fn reserved_pages_measure_zero() {
+        let pages = unsafe {
+            VirtualAlloc(
+                std::ptr::null(),
+                BLOCK_SIZE,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE,
+            )
+        };
+        assert!(!pages.is_null(), "could not reserve pages");
+
+        let size = unsafe { crate::usable_size(pages.cast_const()) };
+        unsafe { VirtualFree(pages, 0, MEM_RELEASE) };
+        assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn null_measures_zero() {
+        assert_eq!(unsafe { crate::usable_size(std::ptr::null::<c_void>()) }, 0);
     }
 }

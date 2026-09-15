@@ -8054,6 +8054,7 @@ dependencies = [
  "rustls",
  "serde",
  "servo",
+ "servo-allocator",
  "servo-background-hang-monitor",
  "servo-base",
  "servo-bluetooth",

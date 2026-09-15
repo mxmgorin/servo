@@ -313,6 +313,27 @@ fn test_bisect_d_one_webview_with_memory_report() {
 }
 
 #[test]
+fn test_bisect_f_report_foreign_pointers() {
+    let servo_test = ServoTest::new();
+    let delegate = Rc::new(WebViewDelegateImpl::default());
+    let webview = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
+        .delegate(delegate.clone())
+        .url(bisect_page_url())
+        .build();
+    show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &webview, &delegate);
+    wait_for_webview_scene_to_be_up_to_date(&servo_test, &webview);
+    let bytes = retained_display_list_bytes(&servo_test);
+    println!("BISECT: memory report done, {bytes} bytes");
+
+    let foreign = servo_allocator::take_foreign_pointers();
+    assert!(
+        foreign.is_empty(),
+        "pointers owned by no heap of this process reached usable_size:\n{}",
+        foreign.join("\n")
+    );
+}
+
+#[test]
 fn test_bisect_e_two_webviews_without_memory_report() {
     let servo_test = ServoTest::new();
     let kept_delegate = Rc::new(WebViewDelegateImpl::default());
