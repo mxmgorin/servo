@@ -220,6 +220,11 @@ mod platform {
     ///
     /// No restrictions. Pointers that the process heap does not own measure as zero.
     pub unsafe extern "C" fn usable_size(ptr: *const c_void) -> usize {
+        // FIXME: temporary diagnostics for the memory report abort; remove before landing.
+        if ptr.is_null() || disabled() {
+            return 0;
+        }
+
         unsafe {
             let heap = GetProcessHeap();
             let Some(block) = process_heap_block(heap, ptr) else {
@@ -268,6 +273,13 @@ mod platform {
     }
 
     // FIXME: temporary diagnostics for the memory report abort; remove before landing.
+
+    /// Whether `SERVO_DISABLE_USABLE_SIZE` is set, which makes every measurement zero
+    /// without touching the heap at all.
+    fn disabled() -> bool {
+        static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *DISABLED.get_or_init(|| std::env::var_os("SERVO_DISABLE_USABLE_SIZE").is_some())
+    }
 
     static FOREIGN_POINTERS: Mutex<Vec<String>> = Mutex::new(Vec::new());
     const MAX_FOREIGN_POINTERS: usize = 32;
@@ -319,8 +331,10 @@ mod platform {
 mod tests {
     use std::os::raw::c_void;
 
+    use windows_sys::Win32::Foundation::FALSE;
     use windows_sys::Win32::System::Memory::{
-        MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, VirtualAlloc, VirtualFree,
+        GetProcessHeap, HeapValidate, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
+        VirtualAlloc, VirtualFree,
     };
 
     static STATIC_DATA: [u8; 64] = [7; 64];
@@ -375,5 +389,34 @@ mod tests {
     #[test]
     fn null_measures_zero() {
         assert_eq!(unsafe { crate::usable_size(std::ptr::null::<c_void>()) }, 0);
+    }
+
+    // Which pointers `HeapValidate` itself tolerates, measured apart from `usable_size`
+    // so that an abort names the call that could not be made safe.
+
+    #[test]
+    fn heap_validate_tolerates_static_memory() {
+        let heap = unsafe { GetProcessHeap() };
+        assert_eq!(
+            unsafe { HeapValidate(heap, 0, STATIC_DATA.as_ptr().cast()) },
+            FALSE
+        );
+    }
+
+    #[test]
+    fn heap_validate_tolerates_stack_memory() {
+        let on_stack = [0u8; BLOCK_SIZE];
+        let heap = unsafe { GetProcessHeap() };
+        assert_eq!(
+            unsafe { HeapValidate(heap, 0, on_stack.as_ptr().cast()) },
+            FALSE
+        );
+    }
+
+    #[test]
+    fn heap_validate_tolerates_an_unmapped_pointer() {
+        let heap = unsafe { GetProcessHeap() };
+        let unmapped = 0x1234_5678_9000usize as *const c_void;
+        assert_eq!(unsafe { HeapValidate(heap, 0, unmapped) }, FALSE);
     }
 }

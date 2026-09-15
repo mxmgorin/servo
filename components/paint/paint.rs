@@ -607,7 +607,9 @@ impl Paint {
     fn collect_memory_report(&self, sender: profile_traits::mem::ReportsChan) {
         let mut memory_report = MemoryReport::default();
         for painter in &self.painters {
-            memory_report += painter.borrow().report_memory();
+            if !profile_traits::mem::skip_memory_report("webrender") {
+                memory_report += painter.borrow().report_memory();
+            }
         }
 
         let mut reports = vec![
@@ -629,11 +631,15 @@ impl Paint {
         ];
 
         perform_memory_report(|ops| {
-            let scroll_trees_memory_usage = self
-                .painters
-                .iter()
-                .map(|painter| painter.borrow().scroll_trees_memory_usage(ops))
-                .sum();
+            let scroll_trees_memory_usage = if profile_traits::mem::skip_memory_report("scroll-tree")
+            {
+                0
+            } else {
+                self.painters
+                    .iter()
+                    .map(|painter| painter.borrow().scroll_trees_memory_usage(ops))
+                    .sum()
+            };
             reports.push(Report {
                 path: path!["paint", "scroll-tree"],
                 kind: ReportKind::ExplicitJemallocHeapSize,

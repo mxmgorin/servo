@@ -299,6 +299,23 @@ thread_local!(static SEEN_POINTERS: LazyCell<RefCell<HashSet<*const c_void>>> = 
     LazyCell::new(Default::default)
 });
 
+// FIXME: temporary diagnostics for the Windows memory report abort; remove before landing.
+
+/// Whether `SERVO_SKIP_MEMORY_REPORT` names `part` in its comma-separated list.
+pub fn skip_memory_report(part: &str) -> bool {
+    static SKIPPED: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    SKIPPED
+        .get_or_init(|| {
+            std::env::var("SERVO_SKIP_MEMORY_REPORT")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::to_owned)
+                .collect()
+        })
+        .iter()
+        .any(|skipped| skipped == part)
+}
+
 /// Invoke the provided function after initializing the memory profile tools.
 /// The function is expected to call all the desired [MallocSizeOf::size_of]
 /// for allocations reachable from the current thread.

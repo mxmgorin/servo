@@ -312,6 +312,61 @@ fn test_bisect_d_one_webview_with_memory_report() {
     println!("BISECT: memory report done, {bytes} bytes");
 }
 
+/// Load a page, then take a memory report with `part` of it left out.
+fn report_without(part: &str) {
+    // SAFETY: no other thread has started yet.
+    unsafe {
+        if part == "usable-size" {
+            std::env::set_var("SERVO_DISABLE_USABLE_SIZE", "1");
+        } else {
+            std::env::set_var("SERVO_SKIP_MEMORY_REPORT", part);
+        }
+    }
+
+    let servo_test = ServoTest::new();
+    let delegate = Rc::new(WebViewDelegateImpl::default());
+    let webview = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
+        .delegate(delegate.clone())
+        .url(bisect_page_url())
+        .build();
+    show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &webview, &delegate);
+    wait_for_webview_scene_to_be_up_to_date(&servo_test, &webview);
+
+    println!("BISECT: requesting a memory report without {part}");
+    let bytes = retained_display_list_bytes(&servo_test);
+    println!("BISECT: memory report done, {bytes} bytes");
+}
+
+#[test]
+fn test_bisect_g_report_without_usable_size() {
+    report_without("usable-size");
+}
+
+#[test]
+fn test_bisect_h_report_without_js() {
+    report_without("js");
+}
+
+#[test]
+fn test_bisect_i_report_without_dom() {
+    report_without("dom");
+}
+
+#[test]
+fn test_bisect_j_report_without_layout() {
+    report_without("layout");
+}
+
+#[test]
+fn test_bisect_k_report_without_webrender() {
+    report_without("webrender");
+}
+
+#[test]
+fn test_bisect_l_report_without_scroll_tree() {
+    report_without("scroll-tree");
+}
+
 #[test]
 fn test_bisect_f_report_foreign_pointers() {
     let servo_test = ServoTest::new();

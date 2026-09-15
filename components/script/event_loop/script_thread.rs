@@ -2736,16 +2736,22 @@ impl ScriptThread {
         let mut computed_objects = HashSet::new();
         perform_memory_report(|ops| {
             for (_, document) in documents.iter() {
-                document
-                    .window()
-                    .layout()
-                    .collect_reports(&mut reports, ops);
+                if !profile_traits::mem::skip_memory_report("layout") {
+                    document
+                        .window()
+                        .layout()
+                        .collect_reports(&mut reports, ops);
+                }
 
-                computed_objects.extend(document.collect_reports(&mut reports, ops));
+                if !profile_traits::mem::skip_memory_report("dom") {
+                    computed_objects.extend(document.collect_reports(&mut reports, ops));
+                }
             }
 
-            let prefix = format!("url({urls})");
-            reports.extend(get_reports(cx, prefix, ops, computed_objects));
+            if !profile_traits::mem::skip_memory_report("js") {
+                let prefix = format!("url({urls})");
+                reports.extend(get_reports(cx, prefix, ops, computed_objects));
+            }
         });
 
         reports_chan.send(ProcessReports::new(reports));
