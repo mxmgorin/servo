@@ -252,6 +252,93 @@ fn test_create_webview_and_immediately_drop_webview_before_shutdown() {
     WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone()).build();
 }
 
+// FIXME: Temporary bisect of the Windows `0xc0000409` abort in
+// `test_closing_a_webview_removes_its_pipelines_from_the_scene`. Do not merge.
+
+fn bisect_page_url() -> Url {
+    Url::parse(
+        "data:text/html,<!DOCTYPE html>\
+            <style>div{width:100px;height:20px;background:red;margin:2px}</style>\
+            <div></div><div></div><div></div><div></div><div></div>",
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_bisect_a_servo_only() {
+    println!("BISECT: starting Servo");
+    let servo_test = ServoTest::new();
+    println!("BISECT: Servo started");
+    drop(servo_test);
+    println!("BISECT: Servo dropped");
+}
+
+#[test]
+fn test_bisect_b_memory_report_without_webview() {
+    println!("BISECT: starting Servo");
+    let servo_test = ServoTest::new();
+    println!("BISECT: requesting memory report");
+    let bytes = retained_display_list_bytes(&servo_test);
+    println!("BISECT: memory report done, {bytes} bytes");
+}
+
+#[test]
+fn test_bisect_c_one_webview_without_memory_report() {
+    let servo_test = ServoTest::new();
+    let delegate = Rc::new(WebViewDelegateImpl::default());
+    let webview = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
+        .delegate(delegate.clone())
+        .url(bisect_page_url())
+        .build();
+    println!("BISECT: waiting for the first WebView to render");
+    show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &webview, &delegate);
+    wait_for_webview_scene_to_be_up_to_date(&servo_test, &webview);
+    println!("BISECT: first WebView rendered");
+}
+
+#[test]
+fn test_bisect_d_one_webview_with_memory_report() {
+    let servo_test = ServoTest::new();
+    let delegate = Rc::new(WebViewDelegateImpl::default());
+    let webview = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
+        .delegate(delegate.clone())
+        .url(bisect_page_url())
+        .build();
+    println!("BISECT: waiting for the first WebView to render");
+    show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &webview, &delegate);
+    wait_for_webview_scene_to_be_up_to_date(&servo_test, &webview);
+    println!("BISECT: requesting memory report");
+    let bytes = retained_display_list_bytes(&servo_test);
+    println!("BISECT: memory report done, {bytes} bytes");
+}
+
+#[test]
+fn test_bisect_e_two_webviews_without_memory_report() {
+    let servo_test = ServoTest::new();
+    let kept_delegate = Rc::new(WebViewDelegateImpl::default());
+    let kept = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
+        .delegate(kept_delegate.clone())
+        .url(bisect_page_url())
+        .build();
+    println!("BISECT: waiting for the kept WebView to render");
+    show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &kept, &kept_delegate);
+    wait_for_webview_scene_to_be_up_to_date(&servo_test, &kept);
+
+    let closed_delegate = Rc::new(WebViewDelegateImpl::default());
+    let closed = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
+        .delegate(closed_delegate.clone())
+        .url(bisect_page_url())
+        .build();
+    println!("BISECT: waiting for the second WebView to render");
+    show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &closed, &closed_delegate);
+    wait_for_webview_scene_to_be_up_to_date(&servo_test, &closed);
+
+    println!("BISECT: closing the second WebView");
+    drop(closed);
+    wait_for_webview_scene_to_be_up_to_date(&servo_test, &kept);
+    println!("BISECT: second WebView closed");
+}
+
 #[test]
 fn test_closing_a_webview_removes_its_pipelines_from_the_scene() {
     let servo_test = ServoTest::new();
@@ -270,33 +357,42 @@ fn test_closing_a_webview_removes_its_pipelines_from_the_scene() {
         .delegate(kept_delegate.clone())
         .url(page_url.clone())
         .build();
+    println!("BISECT: waiting for the kept WebView to render");
     show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &kept, &kept_delegate);
     wait_for_webview_scene_to_be_up_to_date(&servo_test, &kept);
 
+    println!("BISECT: requesting the baseline memory report");
     let baseline = retained_display_list_bytes(&servo_test);
+    println!("BISECT: baseline is {baseline} bytes");
 
     let closed_delegate = Rc::new(WebViewDelegateImpl::default());
     let closed = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
         .delegate(closed_delegate.clone())
         .url(page_url)
         .build();
+    println!("BISECT: waiting for the second WebView to render");
     show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &closed, &closed_delegate);
     wait_for_webview_scene_to_be_up_to_date(&servo_test, &closed);
 
+    println!("BISECT: requesting the two-WebView memory report");
     let with_both = retained_display_list_bytes(&servo_test);
+    println!("BISECT: two WebViews are {with_both} bytes");
     assert!(
         with_both > baseline,
         "A second loaded WebView should add retained display lists \
          ({baseline} bytes to {with_both} bytes)"
     );
 
+    println!("BISECT: closing the second WebView");
     drop(closed);
     wait_for_webview_scene_to_be_up_to_date(&servo_test, &kept);
 
     // Compare against the baseline rather than `with_both`: the root display
     // list is rebuilt on removal, so a plain decrease would pass even if the
     // closed WebView's pipelines were never removed.
+    println!("BISECT: requesting the final memory report");
     let after = retained_display_list_bytes(&servo_test);
+    println!("BISECT: after closing is {after} bytes");
     assert!(
         after.abs_diff(baseline) < with_both.abs_diff(baseline) / 2,
         "Closing a WebView should return the scene to its single-WebView size \
