@@ -239,6 +239,10 @@ mod platform {
         }
     }
 
+    /// Blocks up to this alignment come straight from `HeapAlloc`; `System` over-allocates
+    /// the rest.
+    const MIN_ALIGN: usize = 2 * size_of::<usize>();
+
     /// The process heap block backing `ptr`, if there is one. `HeapSize` trusts the
     /// block header, so an unvalidated pointer fast-fails the whole process.
     unsafe fn process_heap_block(heap: HANDLE, ptr: *const c_void) -> Option<*const c_void> {
@@ -246,15 +250,29 @@ mod platform {
             return Some(ptr);
         }
 
-        // `System` over-allocates blocks aligned beyond `MIN_ALIGN` and stores the real
-        // base pointer in the word preceding the block it hands out.
+        let base = unsafe { over_aligned_base(ptr) }?;
+        (unsafe { HeapValidate(heap, 0, base) } != FALSE).then_some(base)
+    }
+
+    /// The base of the block `ptr` was carved out of: `System` over-allocates a block
+    /// aligned beyond [`MIN_ALIGN`] and stores its base in the preceding word. A base too
+    /// far from `ptr` is garbage, and `HeapValidate` faults on some of it.
+    unsafe fn over_aligned_base(ptr: *const c_void) -> Option<*const c_void> {
+        let alignment = 1usize << (ptr as usize).trailing_zeros();
+        if alignment <= MIN_ALIGN {
+            return None;
+        }
+
         let base_slot = unsafe { (ptr as *const *const c_void).offset(-1) };
         if !is_readable(base_slot.cast()) {
             return None;
         }
 
+        // `HeapAlloc` returned the base, the alignment moved `ptr` forward over the slot.
         let base = unsafe { *base_slot };
-        (unsafe { HeapValidate(heap, 0, base) } != FALSE).then_some(base)
+        let distance = (ptr as usize).checked_sub(base as usize)?;
+        (distance >= size_of::<usize>() && distance < alignment + size_of::<usize>())
+            .then_some(base)
     }
 
     /// Whether `ptr` may be dereferenced.

@@ -265,15 +265,6 @@ fn bisect_page_url() -> Url {
 }
 
 #[test]
-fn test_bisect_a_servo_only() {
-    println!("BISECT: starting Servo");
-    let servo_test = ServoTest::new();
-    println!("BISECT: Servo started");
-    drop(servo_test);
-    println!("BISECT: Servo dropped");
-}
-
-#[test]
 fn test_bisect_b_memory_report_without_webview() {
     println!("BISECT: starting Servo");
     let servo_test = ServoTest::new();
@@ -283,28 +274,24 @@ fn test_bisect_b_memory_report_without_webview() {
 }
 
 #[test]
-fn test_bisect_c_one_webview_without_memory_report() {
-    let servo_test = ServoTest::new();
-    let delegate = Rc::new(WebViewDelegateImpl::default());
-    let webview = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
-        .delegate(delegate.clone())
-        .url(bisect_page_url())
-        .build();
-    println!("BISECT: waiting for the first WebView to render");
-    show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &webview, &delegate);
-    wait_for_webview_scene_to_be_up_to_date(&servo_test, &webview);
-    println!("BISECT: first WebView rendered");
+fn test_bisect_d_one_webview_with_memory_report() {
+    load_page_then_report(bisect_page_url());
 }
 
 #[test]
-fn test_bisect_d_one_webview_with_memory_report() {
+fn test_bisect_p_blank_page_with_memory_report() {
+    load_page_then_report(Url::parse("about:blank").unwrap());
+}
+
+/// Load `url`, then take a memory report.
+fn load_page_then_report(url: Url) {
     let servo_test = ServoTest::new();
     let delegate = Rc::new(WebViewDelegateImpl::default());
     let webview = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
         .delegate(delegate.clone())
-        .url(bisect_page_url())
+        .url(url)
         .build();
-    println!("BISECT: waiting for the first WebView to render");
+    println!("BISECT: waiting for the WebView to render");
     show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &webview, &delegate);
     wait_for_webview_scene_to_be_up_to_date(&servo_test, &webview);
     println!("BISECT: requesting memory report");
@@ -316,11 +303,7 @@ fn test_bisect_d_one_webview_with_memory_report() {
 fn report_without(part: &str) {
     // SAFETY: no other thread has started yet.
     unsafe {
-        if part == "usable-size" {
-            std::env::set_var("SERVO_DISABLE_USABLE_SIZE", "1");
-        } else {
-            std::env::set_var("SERVO_SKIP_MEMORY_REPORT", part);
-        }
+        std::env::set_var("SERVO_SKIP_MEMORY_REPORT", part);
     }
 
     let servo_test = ServoTest::new();
@@ -337,48 +320,11 @@ fn report_without(part: &str) {
     println!("BISECT: memory report done, {bytes} bytes");
 }
 
-#[test]
-fn test_bisect_g_report_without_usable_size() {
-    report_without("usable-size");
-}
-
+/// The only part of the report that survives on Windows, so it is also where the
+/// pointers that no heap owns can be listed.
 #[test]
 fn test_bisect_h_report_without_js() {
     report_without("js");
-}
-
-#[test]
-fn test_bisect_i_report_without_dom() {
-    report_without("dom");
-}
-
-#[test]
-fn test_bisect_j_report_without_layout() {
-    report_without("layout");
-}
-
-#[test]
-fn test_bisect_k_report_without_webrender() {
-    report_without("webrender");
-}
-
-#[test]
-fn test_bisect_l_report_without_scroll_tree() {
-    report_without("scroll-tree");
-}
-
-#[test]
-fn test_bisect_f_report_foreign_pointers() {
-    let servo_test = ServoTest::new();
-    let delegate = Rc::new(WebViewDelegateImpl::default());
-    let webview = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
-        .delegate(delegate.clone())
-        .url(bisect_page_url())
-        .build();
-    show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &webview, &delegate);
-    wait_for_webview_scene_to_be_up_to_date(&servo_test, &webview);
-    let bytes = retained_display_list_bytes(&servo_test);
-    println!("BISECT: memory report done, {bytes} bytes");
 
     let foreign = servo_allocator::take_foreign_pointers();
     assert!(
@@ -388,31 +334,23 @@ fn test_bisect_f_report_foreign_pointers() {
     );
 }
 
+/// SpiderMonkey walks the heap and measures it with its own `_msize`, but never
+/// calls back into Servo.
 #[test]
-fn test_bisect_e_two_webviews_without_memory_report() {
-    let servo_test = ServoTest::new();
-    let kept_delegate = Rc::new(WebViewDelegateImpl::default());
-    let kept = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
-        .delegate(kept_delegate.clone())
-        .url(bisect_page_url())
-        .build();
-    println!("BISECT: waiting for the kept WebView to render");
-    show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &kept, &kept_delegate);
-    wait_for_webview_scene_to_be_up_to_date(&servo_test, &kept);
+fn test_bisect_m_report_without_js_callback() {
+    report_without("js-callback");
+}
 
-    let closed_delegate = Rc::new(WebViewDelegateImpl::default());
-    let closed = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
-        .delegate(closed_delegate.clone())
-        .url(bisect_page_url())
-        .build();
-    println!("BISECT: waiting for the second WebView to render");
-    show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &closed, &closed_delegate);
-    wait_for_webview_scene_to_be_up_to_date(&servo_test, &closed);
+/// SpiderMonkey calls back into Servo, which measures nothing.
+#[test]
+fn test_bisect_n_report_without_dom_sizes() {
+    report_without("js-dom-sizes");
+}
 
-    println!("BISECT: closing the second WebView");
-    drop(closed);
-    wait_for_webview_scene_to_be_up_to_date(&servo_test, &kept);
-    println!("BISECT: second WebView closed");
+/// The callback runs everything except the DOM object measurement itself.
+#[test]
+fn test_bisect_o_report_without_dom_malloc_size_of() {
+    report_without("js-malloc-size-of");
 }
 
 #[test]

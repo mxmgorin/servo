@@ -918,6 +918,11 @@ thread_local!(
 
 #[expect(unsafe_code)]
 unsafe extern "C" fn get_size(obj: *mut JSObject) -> usize {
+    // FIXME: temporary diagnostics for the Windows memory report abort; remove before landing.
+    if profile_traits::mem::skip_memory_report("js-dom-sizes") {
+        return 0;
+    }
+
     let ops = MALLOC_SIZE_OF_OPS.get();
     ALREADY_COMPUTED_OBJECTS.with(|objects| {
         let ignored = objects.borrow();
@@ -1063,7 +1068,12 @@ pub(crate) fn compute_size(
             if dom_object.is_null() {
                 return 0;
             }
-            let size = unsafe { (v.malloc_size_of)(&mut *ops, dom_object) };
+            // FIXME: temporary diagnostics for the Windows memory report abort; remove before landing.
+            let size = if profile_traits::mem::skip_memory_report("js-malloc-size-of") {
+                0
+            } else {
+                unsafe { (v.malloc_size_of)(&mut *ops, dom_object) }
+            };
 
             let Some(per_global_interface_sizes) = per_global_interface_sizes else {
                 return size;
@@ -1106,9 +1116,16 @@ pub(crate) fn get_reports(
         *objects.borrow_mut() = already_computed_objects;
     });
 
+    // FIXME: temporary diagnostics for the Windows memory report abort; remove before landing.
+    let dom_size_callback = if profile_traits::mem::skip_memory_report("js-callback") {
+        None
+    } else {
+        Some(get_size as unsafe extern "C" fn(*mut JSObject) -> usize)
+    };
+
     let stats = unsafe {
         let mut stats = ::std::mem::zeroed();
-        if !CollectServoSizes(cx, &mut stats, Some(get_size)) {
+        if !CollectServoSizes(cx, &mut stats, dom_size_callback) {
             return vec![];
         }
         stats
