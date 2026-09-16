@@ -1135,6 +1135,22 @@ pub(crate) fn get_reports(
                 ptr::null_mut(),
                 &mut stats,
             )
+        } else if profile_traits::mem::skip_memory_report("js-msize") {
+            // The same walk as `js-glue`, measured the way the glue measures it.
+            AddServoSizeOf(
+                cx,
+                Some(servo_allocator::crt_size),
+                ptr::null_mut(),
+                &mut stats,
+            )
+        } else if profile_traits::mem::skip_memory_report("js-measurement") {
+            // Survey the pointers the glue would have measured, `_msize` included.
+            AddServoSizeOf(
+                cx,
+                Some(servo_allocator::counting_size),
+                ptr::null_mut(),
+                &mut stats,
+            )
         } else {
             CollectServoSizes(cx, &mut stats, dom_size_callback)
         };

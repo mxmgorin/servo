@@ -329,6 +329,27 @@ fn test_bisect_h_report_without_js() {
     );
 }
 
+/// The same walk as `test_bisect_q_report_without_js_glue`, measured with the CRT's
+/// `_msize`: the one thing the glue does that Servo's own measurement does not.
+#[test]
+fn test_bisect_s_report_measured_with_msize() {
+    report_without("js-msize");
+}
+
+/// Counts what the glue would have measured. `_msize` rejects the null pointer with a
+/// fast-fail, while every other platform's measurement returns zero for it.
+#[test]
+fn test_bisect_r_survey_measured_pointers() {
+    report_without("js-measurement");
+
+    let (measurements, null_measurements) = servo_allocator::take_measurement_counts();
+    assert_eq!(
+        null_measurements, 0,
+        "the JS report measured the null pointer ({null_measurements} of {measurements} \
+         measurements)"
+    );
+}
+
 /// The JS report taken through `AddServoSizeOf` with Servo's own measurement hook,
 /// which leaves `jsglue`'s `_msize` out of the walk.
 #[test]

@@ -53,6 +53,38 @@ pub fn take_foreign_pointers() -> Vec<String> {
     Vec::new()
 }
 
+static NULL_MEASUREMENTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static MEASUREMENTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How often a measurement was asked for, and how often it was asked for the null
+/// pointer, since the last call.
+pub fn take_measurement_counts() -> (usize, usize) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (
+        MEASUREMENTS.swap(0, Relaxed),
+        NULL_MEASUREMENTS.swap(0, Relaxed),
+    )
+}
+
+/// Measures exactly like `jsglue` does on MSVC, the null pointer included.
+#[cfg(windows)]
+pub use crate::platform::crt_size;
+
+#[cfg(not(windows))]
+pub use crate::platform::usable_size as crt_size;
+
+/// Counts measurement requests instead of measuring, so a caller's pointers can be
+/// surveyed where no heap API fast-fails on them. Safety: the pointer is never read.
+pub unsafe extern "C" fn counting_size(ptr: *const c_void) -> usize {
+    use std::sync::atomic::Ordering::Relaxed;
+    if ptr.is_null() {
+        NULL_MEASUREMENTS.fetch_add(1, Relaxed);
+    } else {
+        MEASUREMENTS.fetch_add(1, Relaxed);
+    }
+    0
+}
+
 type EnclosingSizeFn = unsafe extern "C" fn(*const c_void) -> usize;
 
 /// # Safety
@@ -213,6 +245,18 @@ mod platform {
         GetProcessHeap, GetProcessHeaps, HeapSize, HeapValidate, MEM_COMMIT,
         MEMORY_BASIC_INFORMATION, PAGE_GUARD, PAGE_NOACCESS, VirtualQuery,
     };
+
+    // FIXME: temporary diagnostics for the memory report abort; remove before landing.
+
+    unsafe extern "C" {
+        fn _msize(block: *mut c_void) -> usize;
+    }
+
+    /// The CRT's own measurement, which is what `jsglue` calls on MSVC. Safety: none, it
+    /// terminates the process on a pointer the CRT heap does not own, null included.
+    pub unsafe extern "C" fn crt_size(ptr: *const c_void) -> usize {
+        unsafe { _msize(ptr.cast_mut()) }
+    }
 
     /// Get the size of a heap block.
     ///
@@ -410,6 +454,16 @@ mod tests {
     #[test]
     fn null_measures_zero() {
         assert_eq!(unsafe { crate::usable_size(std::ptr::null::<c_void>()) }, 0);
+    }
+
+    /// What the CRT does with the null pointer SpiderMonkey hands `jsglue`: either it
+    /// reports the documented failure, or the invalid parameter handler ends the process.
+    #[test]
+    fn crt_measurement_of_null_returns_an_error() {
+        assert_eq!(
+            unsafe { crate::crt_size(std::ptr::null::<c_void>()) },
+            usize::MAX
+        );
     }
 
     // Which pointers `HeapValidate` itself tolerates, measured apart from `usable_size`
