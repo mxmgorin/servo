@@ -278,11 +278,6 @@ fn test_bisect_d_one_webview_with_memory_report() {
     load_page_then_report(bisect_page_url());
 }
 
-#[test]
-fn test_bisect_p_blank_page_with_memory_report() {
-    load_page_then_report(Url::parse("about:blank").unwrap());
-}
-
 /// Load `url`, then take a memory report.
 fn load_page_then_report(url: Url) {
     let servo_test = ServoTest::new();
@@ -334,23 +329,18 @@ fn test_bisect_h_report_without_js() {
     );
 }
 
-/// SpiderMonkey walks the heap and measures it with its own `_msize`, but never
-/// calls back into Servo.
+/// The JS report taken through `AddServoSizeOf` with Servo's own measurement hook,
+/// which leaves `jsglue`'s `_msize` out of the walk.
 #[test]
-fn test_bisect_m_report_without_js_callback() {
-    report_without("js-callback");
-}
+fn test_bisect_q_report_without_js_glue() {
+    report_without("js-glue");
 
-/// SpiderMonkey calls back into Servo, which measures nothing.
-#[test]
-fn test_bisect_n_report_without_dom_sizes() {
-    report_without("js-dom-sizes");
-}
-
-/// The callback runs everything except the DOM object measurement itself.
-#[test]
-fn test_bisect_o_report_without_dom_malloc_size_of() {
-    report_without("js-malloc-size-of");
+    let foreign = servo_allocator::take_foreign_pointers();
+    assert!(
+        foreign.is_empty(),
+        "pointers owned by no heap of this process reached usable_size:\n{}",
+        foreign.join("\n")
+    );
 }
 
 #[test]
@@ -1126,8 +1116,8 @@ fn test_contextual_context_menu_items() {
             ContextMenuAction::OpenImageInNewView,
         ],
         ContextMenuElementInformation {
-            flags: ContextMenuElementInformationFlags::Link |
-                ContextMenuElementInformationFlags::Image,
+            flags: ContextMenuElementInformationFlags::Link
+                | ContextMenuElementInformationFlags::Image,
             link_url: Url::parse("https://nested.org").ok(),
             image_url: Url::parse("https://servo.org/nested.png").ok(),
         },

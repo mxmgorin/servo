@@ -41,12 +41,13 @@ use js::panic::wrap_panic;
 use js::realm::CurrentRealm;
 pub(crate) use js::rust::ThreadSafeJSContext;
 use js::rust::wrappers2::{
-    CollectServoSizes, ContextOptionsRef, DispatchableRun, InitConsumeStreamCallback,
-    JS_AddExtraGCRootsTracer, JS_GetPromiseResult, JS_InitDestroyPrincipalsCallback,
-    JS_InitReadPrincipalsCallback, JS_NewStringCopyUTF8N, JS_SetGCCallback, JS_SetGCParameter,
-    JS_SetGlobalJitCompilerOption, JS_SetOffthreadIonCompilationEnabled, JS_SetSecurityCallbacks,
-    SetDOMCallbacks, SetGCSliceCallback, SetPreserveWrapperCallbacks,
-    SetPromiseRejectionTrackerCallback, SetUpEventLoopDispatch,
+    AddServoSizeOf, CollectServoSizes, ContextOptionsRef, DispatchableRun,
+    InitConsumeStreamCallback, JS_AddExtraGCRootsTracer, JS_GetPromiseResult,
+    JS_InitDestroyPrincipalsCallback, JS_InitReadPrincipalsCallback, JS_NewStringCopyUTF8N,
+    JS_SetGCCallback, JS_SetGCParameter, JS_SetGlobalJitCompilerOption,
+    JS_SetOffthreadIonCompilationEnabled, JS_SetSecurityCallbacks, SetDOMCallbacks,
+    SetGCSliceCallback, SetPreserveWrapperCallbacks, SetPromiseRejectionTrackerCallback,
+    SetUpEventLoopDispatch,
 };
 use js::rust::{
     Handle, HandleObject as RustHandleObject, HandleValue, IntoHandle, ParentRuntime,
@@ -375,8 +376,8 @@ unsafe extern "C" fn content_security_policy_allows(
         let csp_list = global.get_csp_list();
 
         // If we don't have any CSP checks to run, short-circuit all logic here
-        allowed = csp_list.is_none() ||
-            match runtime_code {
+        allowed = csp_list.is_none()
+            || match runtime_code {
                 RuntimeCode::JS => {
                     let parameter_strings = unsafe { Handle::from_raw(parameter_strings) };
                     let parameter_strings_length = parameter_strings.len();
@@ -1125,7 +1126,19 @@ pub(crate) fn get_reports(
 
     let stats = unsafe {
         let mut stats = ::std::mem::zeroed();
-        if !CollectServoSizes(cx, &mut stats, dom_size_callback) {
+        // The glue measures with `_msize`, which fast-fails the process on a pointer the
+        // CRT heap does not own; Servo's own hook validates the pointer first.
+        let collected = if profile_traits::mem::skip_memory_report("js-glue") {
+            AddServoSizeOf(
+                cx,
+                Some(servo_allocator::usable_size),
+                ptr::null_mut(),
+                &mut stats,
+            )
+        } else {
+            CollectServoSizes(cx, &mut stats, dom_size_callback)
+        };
+        if !collected {
             return vec![];
         }
         stats

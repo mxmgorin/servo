@@ -378,7 +378,10 @@ mod tests {
 
     #[test]
     fn static_memory_measures_zero() {
-        assert_eq!(unsafe { crate::usable_size(STATIC_DATA.as_ptr().cast()) }, 0);
+        assert_eq!(
+            unsafe { crate::usable_size(STATIC_DATA.as_ptr().cast()) },
+            0
+        );
     }
 
     #[test]
