@@ -329,6 +329,39 @@ fn test_bisect_h_report_without_js() {
     );
 }
 
+/// What pressing "Measure" on `about:memory` does, which is the only way a user
+/// reaches the memory report.
+#[test]
+fn test_bisect_t_about_memory_measures() {
+    let servo_test = ServoTest::new();
+    let delegate = Rc::new(WebViewDelegateImpl::default());
+    let webview = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
+        .delegate(delegate.clone())
+        .url(Url::parse("about:memory").unwrap())
+        .build();
+    show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &webview, &delegate);
+
+    println!("BISECT: pressing Measure");
+    let _ = evaluate_javascript(
+        &servo_test,
+        webview.clone(),
+        "navigator.servo.reportMemory().then(text => { window.reportLength = text.length; })",
+    );
+
+    let measured = (0..100).any(|_| {
+        matches!(
+            evaluate_javascript(
+                &servo_test,
+                webview.clone(),
+                "(window.reportLength ?? 0) > 0"
+            ),
+            Ok(JSValue::Boolean(true))
+        )
+    });
+    println!("BISECT: about:memory measured: {measured}");
+    assert!(measured, "about:memory produced no report");
+}
+
 /// The same walk as `test_bisect_q_report_without_js_glue`, measured with the CRT's
 /// `_msize`: the one thing the glue does that Servo's own measurement does not.
 #[test]

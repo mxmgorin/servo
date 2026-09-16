@@ -1126,8 +1126,8 @@ pub(crate) fn get_reports(
 
     let stats = unsafe {
         let mut stats = ::std::mem::zeroed();
-        // The glue measures with `_msize`, which fast-fails the process on a pointer the
-        // CRT heap does not own; Servo's own hook validates the pointer first.
+        // The heap walk asks about the null pointer, which `_msize` answers by ending the
+        // process through the invalid parameter handler.
         let collected = if profile_traits::mem::skip_memory_report("js-glue") {
             AddServoSizeOf(
                 cx,
