@@ -2261,6 +2261,17 @@ impl WebGL2RenderingContextMethods<crate::DomTypeHolder> for WebGL2RenderingCont
             constants::PACK_ROW_LENGTH => self.texture_pack_row_length.set(param_value as _),
             constants::PACK_SKIP_PIXELS => self.texture_pack_skip_pixels.set(param_value as _),
             constants::PACK_SKIP_ROWS => self.texture_pack_skip_rows.set(param_value as _),
+            // FIXME: uploads ignore these, so only the default 0 is honest;
+            // a non-zero value must error rather than corrupt silently.
+            constants::UNPACK_ROW_LENGTH |
+            constants::UNPACK_IMAGE_HEIGHT |
+            constants::UNPACK_SKIP_PIXELS |
+            constants::UNPACK_SKIP_ROWS |
+            constants::UNPACK_SKIP_IMAGES => {
+                if param_value != 0 {
+                    self.base.webgl_error(InvalidOperation);
+                }
+            },
             _ => self.base.PixelStorei(param_name, param_value),
         }
     }
