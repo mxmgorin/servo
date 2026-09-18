@@ -984,6 +984,49 @@ impl WebGL2RenderingContext {
             fb.invalidate_texture(texture);
         }
     }
+
+    #[expect(clippy::too_many_arguments)]
+    fn tex_sub_image_3d(
+        &self,
+        texture: &WebGLTexture,
+        target: TexImageTarget,
+        data_type: TexDataType,
+        format: TexFormat,
+        level: u32,
+        xoffset: i32,
+        yoffset: i32,
+        zoffset: i32,
+        depth: u32,
+        unpacking_alignment: u32,
+        data: TexPixels,
+    ) {
+        let effective_data_type = self
+            .base
+            .extension_manager()
+            .effective_type(data_type.as_gl_constant());
+
+        self.base.send_command(WebGLCommand::TexSubImage3D {
+            target: target.as_gl_constant(),
+            level,
+            xoffset,
+            yoffset,
+            zoffset,
+            size: data.size(),
+            depth,
+            format,
+            data_type,
+            effective_data_type,
+            unpacking_alignment,
+            alpha_treatment: data.alpha_treatment(),
+            y_axis_treatment: data.y_axis_treatment(),
+            pixel_format: data.pixel_format(),
+            data: data.into_shared_memory().into(),
+        });
+
+        if let Some(fb) = self.base.bound_draw_framebuffer() {
+            fb.invalidate_texture(texture);
+        }
+    }
 }
 
 impl CanvasContext for WebGL2RenderingContext {
@@ -3277,6 +3320,173 @@ impl WebGL2RenderingContextMethods<crate::DomTypeHolder> for WebGL2RenderingCont
             height,
             depth,
             border,
+            unpacking_alignment,
+            tex_source,
+        );
+        Ok(())
+    }
+
+    /// <https://www.khronos.org/registry/webgl/specs/latest/2.0/#4.7.6>
+    ///
+    /// Updates a sub-region of a 3D or 2D-array texture's mipmap level.
+    fn TexSubImage3D(
+        &self,
+        no_gc: &NoGC,
+        target: u32,
+        level: i32,
+        xoffset: i32,
+        yoffset: i32,
+        zoffset: i32,
+        width: i32,
+        height: i32,
+        depth: i32,
+        format: u32,
+        type_: u32,
+        src_data: CustomAutoRooterGuard<Option<ArrayBufferView>>,
+        src_offset: u32,
+    ) -> Fallible<()> {
+        // If a WebGLBuffer is bound to the PIXEL_UNPACK_BUFFER target,
+        // generates an INVALID_OPERATION error.
+        if self.bound_pixel_unpack_buffer.get().is_some() {
+            self.base.webgl_error(InvalidOperation);
+            return Ok(());
+        }
+
+        // A null srcData generates an INVALID_VALUE error.
+        if src_data.is_none() {
+            self.base.webgl_error(InvalidValue);
+            return Ok(());
+        }
+
+        // The existing image supplies what texImage3D takes as parameters: its
+        // internal format validates format/type, its extent bounds the offsets.
+        let image_target = match TexImageTarget::from_gl_constant(target) {
+            Some(image_target) if image_target.dimensions() == 3 => image_target,
+            _ => {
+                self.base.webgl_error(InvalidEnum);
+                return Ok(());
+            },
+        };
+        let Some(texture) = self
+            .base
+            .textures()
+            .active_texture_for_image_target(image_target)
+        else {
+            self.base.webgl_error(InvalidOperation);
+            return Ok(());
+        };
+        if level < 0 {
+            self.base.webgl_error(InvalidValue);
+            return Ok(());
+        }
+        let Some(image_info) = texture.image_info_for_target(&image_target, level as u32) else {
+            self.base.webgl_error(InvalidOperation);
+            return Ok(());
+        };
+
+        let Ok(TexImage3DValidatorResult {
+            width,
+            height,
+            depth,
+            level,
+            texture,
+            target,
+            format,
+            data_type,
+            ..
+        }) = TexImage3DValidator::new(
+            &self.base,
+            target,
+            level,
+            image_info.internal_format().as_gl_constant(),
+            width,
+            height,
+            depth,
+            0,
+            format,
+            type_,
+            &src_data,
+        )
+        .validate()
+        else {
+            return Ok(());
+        };
+
+        if xoffset < 0 ||
+            yoffset < 0 ||
+            zoffset < 0 ||
+            xoffset as u32 + width > image_info.width() ||
+            yoffset as u32 + height > image_info.height() ||
+            zoffset as u32 + depth > image_info.depth()
+        {
+            self.base.webgl_error(InvalidValue);
+            return Ok(());
+        }
+
+        let unpacking_alignment = self.base.texture_unpacking_alignment();
+        let element_size = data_type.element_size();
+        let components_per_element = data_type.components_per_element();
+        let components = format.components();
+        // NOTE: width, height and depth are positive or zero due to validate()
+        let expected_byte_len = if height == 0 || depth == 0 {
+            0
+        } else {
+            // Unpack alignment does not pad the last row of the last image, so
+            // a 1x1x1 GL_ALPHA/GL_UNSIGNED_BYTE upload needs exactly one byte.
+            let cpp = element_size * components / components_per_element;
+            let mut padding_bytes = (cpp * width) % unpacking_alignment;
+            if padding_bytes > 0 {
+                padding_bytes = unpacking_alignment - padding_bytes;
+            }
+            let bytes_per_row = cpp * width + padding_bytes;
+            let bytes_last_row = cpp * width;
+            let bytes_per_image = bytes_per_row * height;
+            let bytes_last_image = bytes_per_row * (height - 1) + bytes_last_row;
+            bytes_per_image * (depth - 1) + bytes_last_image
+        };
+
+        // srcOffset counts elements of the view; the validator pinned the
+        // view's element size to the data type's.
+        let src_byte_offset = src_offset as usize * element_size as usize;
+        let bytes = match *src_data {
+            Some(ref data) => data.as_slice_safe(no_gc).unwrap_or(&[]),
+            None => unreachable!("null srcData rejected above"),
+        };
+        if bytes.len() < src_byte_offset + expected_byte_len as usize {
+            self.base.webgl_error(InvalidOperation);
+            return Ok(());
+        }
+        let buff = GenericSharedMemory::from_bytes(
+            &bytes[src_byte_offset..src_byte_offset + expected_byte_len as usize],
+        );
+
+        let (alpha_treatment, y_axis_treatment) =
+            self.base.get_current_unpack_state(Alpha::NotPremultiplied);
+        // UNPACK_FLIP_Y_WEBGL / UNPACK_PREMULTIPLY_ALPHA_WEBGL with client-side
+        // data is an INVALID_OPERATION for texSubImage3D per spec.
+        if let (Some(AlphaTreatment::Premultiply), YAxisTreatment::Flipped) =
+            (alpha_treatment, y_axis_treatment)
+        {
+            self.base.webgl_error(InvalidOperation);
+            return Ok(());
+        }
+        let tex_source = TexPixels::from_array(
+            buff,
+            Size2D::new(width, height),
+            alpha_treatment,
+            y_axis_treatment,
+        );
+
+        self.tex_sub_image_3d(
+            &texture,
+            target,
+            data_type,
+            format,
+            level,
+            xoffset,
+            yoffset,
+            zoffset,
+            depth,
             unpacking_alignment,
             tex_source,
         );
