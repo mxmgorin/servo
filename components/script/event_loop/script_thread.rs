@@ -3248,6 +3248,7 @@ impl ScriptThread {
 
                 debug!("{pipeline_id}: Clearing JavaScript runtime");
                 window.clear_js_runtime();
+                document.release_rooted_handles(cx);
             }
         }
 
