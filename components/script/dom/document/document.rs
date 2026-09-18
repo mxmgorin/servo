@@ -1028,6 +1028,21 @@ impl Document {
         &self.window
     }
 
+    /// Drop the GC roots Rust holds into this document's realm: a callback left
+    /// behind keeps the whole document alive for the life of the process.
+    pub(crate) fn release_rooted_handles(&self) {
+        for node in self
+            .upcast::<Node>()
+            .traverse_preorder(ShadowIncluding::Yes)
+        {
+            node.upcast::<EventTarget>().remove_all_listeners();
+        }
+        if let Some(fonts) = self.fonts.get() {
+            fonts.upcast::<EventTarget>().remove_all_listeners();
+        }
+        self.window.upcast::<EventTarget>().remove_all_listeners();
+    }
+
     #[inline]
     pub(crate) fn is_html_document(&self) -> bool {
         self.is_html_document
