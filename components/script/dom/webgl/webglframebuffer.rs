@@ -288,19 +288,29 @@ impl WebGLFramebuffer {
         if self.check_status() != constants::FRAMEBUFFER_COMPLETE {
             return Err(WebGLError::InvalidFramebufferOperation);
         }
-        let color = match self.attachment(constants::COLOR_ATTACHMENT0) {
-            Some(WebGLFramebufferAttachmentRoot::Renderbuffer(rb)) => Some(rb.internal_format()),
-            _ => None,
-        };
-        let depth = match self.attachment(constants::DEPTH_ATTACHMENT) {
-            Some(WebGLFramebufferAttachmentRoot::Renderbuffer(rb)) => Some(rb.internal_format()),
-            _ => None,
-        };
-        let stencil = match self.attachment(constants::STENCIL_ATTACHMENT) {
-            Some(WebGLFramebufferAttachmentRoot::Renderbuffer(rb)) => Some(rb.internal_format()),
-            _ => None,
-        };
-        Ok((color, depth, stencil))
+        Ok((
+            self.attachment_format(constants::COLOR_ATTACHMENT0),
+            self.attachment_format(constants::DEPTH_ATTACHMENT),
+            self.attachment_format(constants::STENCIL_ATTACHMENT),
+        ))
+    }
+
+    /// The internal format of the image at `attachment`, texture or renderbuffer.
+    fn attachment_format(&self, attachment: u32) -> Option<u32> {
+        match self.attachment_binding(attachment)?.borrow().as_ref()? {
+            WebGLFramebufferAttachment::Renderbuffer(rb) => Some(rb.internal_format()),
+            WebGLFramebufferAttachment::Texture { texture, level } => texture
+                .image_info_at_face(0, *level as u32)
+                .map(|info| info.internal_format().as_gl_constant()),
+        }
+    }
+
+    /// Whether the color image is a texture, which WebGL 2 never multisamples.
+    pub(crate) fn has_texture_color_attachment(&self) -> bool {
+        matches!(
+            self.attachment(constants::COLOR_ATTACHMENT0),
+            Some(WebGLFramebufferAttachmentRoot::Texture(_))
+        )
     }
 
     fn check_attachment_constraints<'a>(
