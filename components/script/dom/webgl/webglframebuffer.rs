@@ -317,19 +317,44 @@ impl WebGLFramebuffer {
         if self.check_status() != constants::FRAMEBUFFER_COMPLETE {
             return Err(WebGLError::InvalidFramebufferOperation);
         }
-        let color = match self.attachment(constants::COLOR_ATTACHMENT0) {
-            Some(WebGLFramebufferAttachmentRoot::Renderbuffer(rb)) => Some(rb.internal_format()),
-            _ => None,
-        };
-        let depth = match self.attachment(constants::DEPTH_ATTACHMENT) {
-            Some(WebGLFramebufferAttachmentRoot::Renderbuffer(rb)) => Some(rb.internal_format()),
-            _ => None,
-        };
-        let stencil = match self.attachment(constants::STENCIL_ATTACHMENT) {
-            Some(WebGLFramebufferAttachmentRoot::Renderbuffer(rb)) => Some(rb.internal_format()),
-            _ => None,
-        };
-        Ok((color, depth, stencil))
+        Ok((
+            self.attachment_format(constants::COLOR_ATTACHMENT0),
+            self.attachment_format(constants::DEPTH_ATTACHMENT),
+            self.attachment_format(constants::STENCIL_ATTACHMENT),
+        ))
+    }
+
+    /// The internal format of the image at `attachment`, texture or renderbuffer.
+    fn attachment_format(&self, attachment: u32) -> Option<u32> {
+        match self.attachment_binding(attachment)?.borrow().as_ref()? {
+            WebGLFramebufferAttachment::Renderbuffer(rb) => Some(rb.internal_format()),
+            WebGLFramebufferAttachment::Texture { texture, level, .. } => texture
+                .image_info_at_face(0, *level as u32)
+                .map(|info| info.internal_format().as_gl_constant()),
+        }
+    }
+
+    /// The format of the color image a read takes from, if the read buffer has one.
+    pub(crate) fn read_color_format(&self) -> Option<u32> {
+        self.attachment_format(self.read_buffer())
+    }
+
+    /// The formats of the color images the enabled draw buffers write to.
+    pub(crate) fn draw_color_formats(&self) -> Vec<u32> {
+        self.color_draw_buffers
+            .borrow()
+            .iter()
+            .filter_map(|&buffer| self.attachment_format(buffer))
+            .collect()
+    }
+
+    /// Whether the read color image is single-sampled; WebGL 2 never multisamples a texture.
+    pub(crate) fn is_color_single_sampled(&self) -> bool {
+        match self.attachment(self.read_buffer()) {
+            Some(WebGLFramebufferAttachmentRoot::Renderbuffer(rb)) => rb.sample_count() == 0,
+            Some(WebGLFramebufferAttachmentRoot::Texture(_)) => true,
+            None => false,
+        }
     }
 
     fn check_attachment_constraints<'a>(

@@ -4067,20 +4067,41 @@ impl WebGL2RenderingContextMethods<crate::DomTypeHolder> for WebGL2RenderingCont
             Ok((color, depth, stencil))
         };
 
-        let (src_color, src_depth, src_stencil) = match src_fb {
+        let src_single_sampled = src_fb
+            .as_ref()
+            .is_none_or(|fb| fb.is_color_single_sampled());
+        let (src_color, src_depth, src_stencil) = match &src_fb {
             Some(fb) => {
                 handle_potential_webgl_error!(self.base, fb.get_attachment_formats(), return)
             },
             None => handle_potential_webgl_error!(self.base, get_default_formats(), return),
         };
-        let (dst_color, dst_depth, dst_stencil) = match dst_fb {
+        let (dst_color, dst_depth, dst_stencil) = match &dst_fb {
             Some(fb) => {
                 handle_potential_webgl_error!(self.base, fb.get_attachment_formats(), return)
             },
             None => handle_potential_webgl_error!(self.base, get_default_formats(), return),
         };
 
-        if bits.intersects(BlitFrameBufferFlags::COLOR) && src_color != dst_color {
+        let src_color = src_fb
+            .as_ref()
+            .map_or(src_color, |fb| fb.read_color_format());
+        let dst_colors = dst_fb.as_ref().map_or_else(
+            || dst_color.into_iter().collect(),
+            |fb| fb.draw_color_formats(),
+        );
+        // Single-sampled blits convert within a component class, multisampled ones need
+        // identical formats; a missing image skips the check (GLES 3.0 section 4.3.3).
+        let colors_compatible = src_color.is_none_or(|src| {
+            dst_colors.iter().all(|&dst| {
+                if src_single_sampled {
+                    blit_color_class(src) == blit_color_class(dst)
+                } else {
+                    src == dst
+                }
+            })
+        });
+        if bits.intersects(BlitFrameBufferFlags::COLOR) && !colors_compatible {
             return self.base.webgl_error(InvalidOperation);
         }
         if bits.intersects(BlitFrameBufferFlags::DEPTH) && src_depth != dst_depth {
@@ -5399,5 +5420,38 @@ impl WebGL2RenderingContextMethods<crate::DomTypeHolder> for WebGL2RenderingCont
 impl WebGL2RenderingContextHelpers for WebGL2RenderingContext {
     fn is_webgl2_enabled(cx: &mut js::context::JSContext, global: HandleObject) -> bool {
         Self::is_webgl2_enabled(cx, global)
+    }
+}
+
+/// The component class of a color format, within which a blit converts.
+#[derive(PartialEq)]
+enum BlitColorClass {
+    FixedOrFloat,
+    SignedInteger,
+    UnsignedInteger,
+}
+
+fn blit_color_class(format: u32) -> BlitColorClass {
+    match format {
+        constants::R8I |
+        constants::R16I |
+        constants::R32I |
+        constants::RG8I |
+        constants::RG16I |
+        constants::RG32I |
+        constants::RGBA8I |
+        constants::RGBA16I |
+        constants::RGBA32I => BlitColorClass::SignedInteger,
+        constants::R8UI |
+        constants::R16UI |
+        constants::R32UI |
+        constants::RG8UI |
+        constants::RG16UI |
+        constants::RG32UI |
+        constants::RGBA8UI |
+        constants::RGBA16UI |
+        constants::RGBA32UI |
+        constants::RGB10_A2UI => BlitColorClass::UnsignedInteger,
+        _ => BlitColorClass::FixedOrFloat,
     }
 }
