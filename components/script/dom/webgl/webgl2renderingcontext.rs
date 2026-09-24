@@ -66,8 +66,8 @@ use crate::dom::webgl::webglprogram::WebGLProgram;
 use crate::dom::webgl::webglquery::WebGLQuery;
 use crate::dom::webgl::webglrenderbuffer::{WebGLRenderbuffer, renderbuffer_format};
 use crate::dom::webgl::webglrenderingcontext::{
-    Operation, TexPixels, TexSource, VertexAttrib, WebGLRenderingContext, uniform_get,
-    uniform_typed,
+    Operation, TexPixels, TexSource, VertexAttrib, WebGLRenderingContext, bytes_per_pixel,
+    uniform_get, uniform_typed,
 };
 use crate::dom::webgl::webglsampler::{WebGLSampler, WebGLSamplerValue};
 use crate::dom::webgl::webglshader::WebGLShader;
@@ -1109,6 +1109,22 @@ impl WebGL2RenderingContextMethods<crate::DomTypeHolder> for WebGL2RenderingCont
                 rval.set(DoubleValue(
                     self.base.limits().max_client_wait_timeout_webgl.as_nanos() as f64,
                 ));
+                return;
+            },
+            constants::UNPACK_ROW_LENGTH |
+            constants::UNPACK_IMAGE_HEIGHT |
+            constants::UNPACK_SKIP_PIXELS |
+            constants::UNPACK_SKIP_ROWS |
+            constants::UNPACK_SKIP_IMAGES => {
+                let layout = self.base.texture_unpack_layout();
+                let value = match parameter {
+                    constants::UNPACK_ROW_LENGTH => layout.row_length,
+                    constants::UNPACK_IMAGE_HEIGHT => layout.image_height,
+                    constants::UNPACK_SKIP_PIXELS => layout.skip_pixels,
+                    constants::UNPACK_SKIP_ROWS => layout.skip_rows,
+                    _ => layout.skip_images,
+                };
+                rval.set(Int32Value(value as i32));
                 return;
             },
             constants::MAX_SERVER_WAIT_TIMEOUT => {
@@ -2261,16 +2277,21 @@ impl WebGL2RenderingContextMethods<crate::DomTypeHolder> for WebGL2RenderingCont
             constants::PACK_ROW_LENGTH => self.texture_pack_row_length.set(param_value as _),
             constants::PACK_SKIP_PIXELS => self.texture_pack_skip_pixels.set(param_value as _),
             constants::PACK_SKIP_ROWS => self.texture_pack_skip_rows.set(param_value as _),
-            // FIXME: uploads ignore these, so only the default 0 is honest;
-            // a non-zero value must error rather than corrupt silently.
             constants::UNPACK_ROW_LENGTH |
             constants::UNPACK_IMAGE_HEIGHT |
             constants::UNPACK_SKIP_PIXELS |
             constants::UNPACK_SKIP_ROWS |
             constants::UNPACK_SKIP_IMAGES => {
-                if param_value != 0 {
-                    self.base.webgl_error(InvalidOperation);
+                let mut layout = self.base.texture_unpack_layout();
+                let value = param_value as u32;
+                match param_name {
+                    constants::UNPACK_ROW_LENGTH => layout.row_length = value,
+                    constants::UNPACK_IMAGE_HEIGHT => layout.image_height = value,
+                    constants::UNPACK_SKIP_PIXELS => layout.skip_pixels = value,
+                    constants::UNPACK_SKIP_ROWS => layout.skip_rows = value,
+                    _ => layout.skip_images = value,
                 }
+                self.base.set_texture_unpack_layout(layout);
             },
             _ => self.base.PixelStorei(param_name, param_value),
         }
@@ -3250,8 +3271,6 @@ impl WebGL2RenderingContextMethods<crate::DomTypeHolder> for WebGL2RenderingCont
             return Ok(());
         };
 
-        // TODO: If pixel store parameter constraints are not met, generates an INVALID_OPERATION error.
-
         let unpacking_alignment = self.base.texture_unpacking_alignment();
         let element_size = data_type.element_size();
         let components_per_element = data_type.components_per_element();
@@ -3279,7 +3298,17 @@ impl WebGL2RenderingContextMethods<crate::DomTypeHolder> for WebGL2RenderingCont
         // If srcData is null, a buffer of sufficient size initialized to 0 is passed.
         let buff = match *src_data {
             Some(ref data) => {
-                GenericSharedMemory::from_bytes(data.as_slice_safe(no_gc).unwrap_or(&[]))
+                let block = match self.base.unpack_block(
+                    data.as_slice_safe(no_gc).unwrap_or(&[]),
+                    width,
+                    height,
+                    Some(depth),
+                    bytes_per_pixel(format, data_type),
+                ) {
+                    Ok(block) => block,
+                    Err(()) => return Ok(()),
+                };
+                GenericSharedMemory::from_bytes(&block)
             },
             None => GenericSharedMemory::from_byte(0, expected_byte_len as usize),
         };
@@ -3451,13 +3480,25 @@ impl WebGL2RenderingContextMethods<crate::DomTypeHolder> for WebGL2RenderingCont
             Some(ref data) => data.as_slice_safe(no_gc).unwrap_or(&[]),
             None => unreachable!("null srcData rejected above"),
         };
-        if bytes.len() < src_byte_offset + expected_byte_len as usize {
+        let Some(bytes) = bytes.get(src_byte_offset..) else {
+            self.base.webgl_error(InvalidOperation);
+            return Ok(());
+        };
+        let block = match self.base.unpack_block(
+            bytes,
+            width,
+            height,
+            Some(depth),
+            bytes_per_pixel(format, data_type),
+        ) {
+            Ok(block) => block,
+            Err(()) => return Ok(()),
+        };
+        if block.len() < expected_byte_len as usize {
             self.base.webgl_error(InvalidOperation);
             return Ok(());
         }
-        let buff = GenericSharedMemory::from_bytes(
-            &bytes[src_byte_offset..src_byte_offset + expected_byte_len as usize],
-        );
+        let buff = GenericSharedMemory::from_bytes(&block[..expected_byte_len as usize]);
 
         let (alpha_treatment, y_axis_treatment) =
             self.base.get_current_unpack_state(Alpha::NotPremultiplied);
@@ -3573,6 +3614,16 @@ impl WebGL2RenderingContextMethods<crate::DomTypeHolder> for WebGL2RenderingCont
 
         if pbo_offset < 0 || pbo_offset as usize > pixel_unpack_buffer.capacity() {
             self.base.webgl_error(InvalidValue);
+            return Ok(());
+        }
+
+        // FIXME: the unpack layout is applied to client memory only; a buffer
+        // upload would ignore it, so a non-default one errors instead.
+        let mut layout = self.base.texture_unpack_layout();
+        layout.image_height = 0;
+        layout.skip_images = 0;
+        if layout != Default::default() {
+            self.base.webgl_error(InvalidOperation);
             return Ok(());
         }
 
@@ -3752,7 +3803,17 @@ impl WebGL2RenderingContextMethods<crate::DomTypeHolder> for WebGL2RenderingCont
         }
 
         let src_data_slice = src_data.as_slice_safe(no_gc).unwrap_or(&[]);
-        let buff = GenericSharedMemory::from_bytes(&src_data_slice[src_byte_offset..]);
+        let block = match self.base.unpack_block(
+            &src_data_slice[src_byte_offset..],
+            width,
+            height,
+            None,
+            bytes_per_pixel(format, data_type),
+        ) {
+            Ok(block) => block,
+            Err(()) => return Ok(()),
+        };
+        let buff = GenericSharedMemory::from_bytes(&block);
 
         let expected_byte_length = match self.base.validate_tex_image_2d_data(
             width,
