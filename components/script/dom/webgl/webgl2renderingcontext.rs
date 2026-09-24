@@ -3943,6 +3943,11 @@ impl WebGL2RenderingContextMethods<crate::DomTypeHolder> for WebGL2RenderingCont
             Ok((color, depth, stencil))
         };
 
+        // A renderbuffer's sample count is not tracked, so only a texture or the
+        // non-antialiased back buffer is known to be single-sampled.
+        let src_single_sampled = src_fb
+            .as_ref()
+            .is_none_or(|fb| fb.has_texture_color_attachment());
         let (src_color, src_depth, src_stencil) = match src_fb {
             Some(fb) => {
                 handle_potential_webgl_error!(self.base, fb.get_attachment_formats(), return)
@@ -3956,7 +3961,15 @@ impl WebGL2RenderingContextMethods<crate::DomTypeHolder> for WebGL2RenderingCont
             None => handle_potential_webgl_error!(self.base, get_default_formats(), return),
         };
 
-        if bits.intersects(BlitFrameBufferFlags::COLOR) && src_color != dst_color {
+        // A single-sampled blit converts between formats of one component class
+        // (GLES 3.0 section 4.3.3); a multisampled one needs identical formats.
+        let colors_compatible = match (src_color, dst_color) {
+            (Some(src), Some(dst)) if src_single_sampled => {
+                blit_color_class(src) == blit_color_class(dst)
+            },
+            _ => src_color == dst_color,
+        };
+        if bits.intersects(BlitFrameBufferFlags::COLOR) && !colors_compatible {
             return self.base.webgl_error(InvalidOperation);
         }
         if bits.intersects(BlitFrameBufferFlags::DEPTH) && src_depth != dst_depth {
@@ -5287,5 +5300,38 @@ impl WebGL2RenderingContextMethods<crate::DomTypeHolder> for WebGL2RenderingCont
 impl WebGL2RenderingContextHelpers for WebGL2RenderingContext {
     fn is_webgl2_enabled(cx: &mut js::context::JSContext, global: HandleObject) -> bool {
         Self::is_webgl2_enabled(cx, global)
+    }
+}
+
+/// The component class of a color format, within which a blit converts.
+#[derive(PartialEq)]
+enum BlitColorClass {
+    FixedOrFloat,
+    SignedInteger,
+    UnsignedInteger,
+}
+
+fn blit_color_class(format: u32) -> BlitColorClass {
+    match format {
+        constants::R8I |
+        constants::R16I |
+        constants::R32I |
+        constants::RG8I |
+        constants::RG16I |
+        constants::RG32I |
+        constants::RGBA8I |
+        constants::RGBA16I |
+        constants::RGBA32I => BlitColorClass::SignedInteger,
+        constants::R8UI |
+        constants::R16UI |
+        constants::R32UI |
+        constants::RG8UI |
+        constants::RG16UI |
+        constants::RG32UI |
+        constants::RGBA8UI |
+        constants::RGBA16UI |
+        constants::RGBA32UI |
+        constants::RGB10_A2UI => BlitColorClass::UnsignedInteger,
+        _ => BlitColorClass::FixedOrFloat,
     }
 }
