@@ -969,7 +969,7 @@ impl WebGLRenderingContext {
                 size.width,
                 size.height,
                 1,
-                format,
+                internal_format,
                 level,
                 Some(data_type)
             )
@@ -2961,46 +2961,24 @@ impl WebGLRenderingContextMethods<crate::DomTypeHolder> for WebGLRenderingContex
             return self.webgl_error(InvalidOperation);
         }
 
-        let framebuffer_format = match self.bound_draw_framebuffer.get() {
-            Some(fb) => match fb.attachment(constants::COLOR_ATTACHMENT0) {
-                Some(WebGLFramebufferAttachmentRoot::Renderbuffer(rb)) => {
-                    TexFormat::from_gl_constant(rb.internal_format())
-                },
-                Some(WebGLFramebufferAttachmentRoot::Texture(texture)) => texture
-                    .image_info_for_target(&target, 0)
-                    .map(|info| info.internal_format()),
-                None => None,
-            },
+        let source_format = match self.bound_draw_framebuffer.get() {
+            Some(fb) => fb.attachment_effective_format(fb.read_buffer()),
             None => {
                 let attrs = self.GetContextAttributes().unwrap();
                 Some(if attrs.alpha {
-                    TexFormat::RGBA
+                    TexFormat::RGBA8
                 } else {
-                    TexFormat::RGB
+                    TexFormat::RGB8
                 })
             },
         };
-
-        let framebuffer_format = match framebuffer_format {
-            Some(f) => f,
-            None => {
-                self.webgl_error(InvalidOperation);
-                return;
-            },
-        };
-
-        match (framebuffer_format, internal_format) {
-            (a, b) if a == b => (),
-            (TexFormat::RGBA, TexFormat::RGB) => (),
-            (TexFormat::RGBA, TexFormat::Alpha) => (),
-            (TexFormat::RGBA, TexFormat::Luminance) => (),
-            (TexFormat::RGBA, TexFormat::LuminanceAlpha) => (),
-            (TexFormat::RGB, TexFormat::Luminance) => (),
-            _ => {
-                self.webgl_error(InvalidOperation);
-                return;
-            },
-        }
+        let source_format =
+            handle_potential_webgl_error!(self, source_format.ok_or(InvalidOperation), return);
+        handle_potential_webgl_error!(
+            self,
+            validate_copy_tex_image_formats(source_format, internal_format),
+            return
+        );
 
         // NB: TexImage2D depth is always equal to 1
         handle_potential_webgl_error!(
@@ -5422,4 +5400,47 @@ fn array_buffer_type_to_sized_type(type_: Type) -> Option<SizedDataType> {
 /// The bytes one pixel of `format` and `data_type` takes in client memory.
 pub(crate) fn bytes_per_pixel(format: TexFormat, data_type: TexDataType) -> u32 {
     data_type.element_size() * format.components() / data_type.components_per_element()
+}
+
+/// Whether `copyTexImage2D` may fill a texture of `destination` format from a color buffer of
+/// `source` format (OpenGL ES 3.0.6 §3.8.5).
+fn validate_copy_tex_image_formats(source: TexFormat, destination: TexFormat) -> WebGLResult<()> {
+    // Table 3.16: the texture may drop components but not add them; luminance reads red.
+    let components = |format: TexFormat| -> Option<(u8, bool)> {
+        Some(match format.to_unsized() {
+            TexFormat::Alpha => (0b0001, false),
+            TexFormat::Luminance | TexFormat::Red => (0b1000, false),
+            TexFormat::LuminanceAlpha => (0b1001, false),
+            TexFormat::RG => (0b1100, false),
+            TexFormat::RGB => (0b1110, false),
+            TexFormat::RGBA => (0b1111, false),
+            TexFormat::RedInteger => (0b1000, true),
+            TexFormat::RGInteger => (0b1100, true),
+            TexFormat::RGBInteger => (0b1110, true),
+            TexFormat::RGBAInteger => (0b1111, true),
+            _ => return None,
+        })
+    };
+    let (source_components, source_integer) = components(source).ok_or(InvalidOperation)?;
+    let (destination_components, destination_integer) =
+        components(destination).ok_or(InvalidOperation)?;
+    if destination_components & !source_components != 0 ||
+        source_integer != destination_integer ||
+        source.is_srgb() != destination.is_srgb()
+    {
+        return Err(InvalidOperation);
+    }
+    // A sized destination must store its components exactly as the source does.
+    if let Some(destination_sizes) = destination.component_sizes() {
+        let source_sizes = source.component_sizes().ok_or(InvalidOperation)?;
+        if destination.component_type() != source.component_type() ||
+            destination_sizes
+                .iter()
+                .zip(source_sizes)
+                .any(|(destination, source)| *destination != 0 && *destination != source)
+        {
+            return Err(InvalidOperation);
+        }
+    }
+    Ok(())
 }
