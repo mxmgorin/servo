@@ -45,6 +45,10 @@ enum WebGLFramebufferAttachment {
     Texture {
         texture: Dom<WebGLTexture>,
         level: i32,
+        /// Cube face or texture target, so faces count as distinct images.
+        target: u32,
+        /// Array or 3D slice; `None` for a 2D or cube face image.
+        layer: Option<i32>,
     },
 }
 
@@ -60,6 +64,31 @@ impl WebGLFramebufferAttachment {
         match *self {
             WebGLFramebufferAttachment::Renderbuffer(ref r) => r.mark_initialized(),
             WebGLFramebufferAttachment::Texture { .. } => (),
+        }
+    }
+
+    /// Whether both hold one image: a renderbuffer, or one level, face and layer of a texture.
+    fn is_same_image(&self, other: &Self) -> bool {
+        use WebGLFramebufferAttachment::{Renderbuffer, Texture};
+        match (self, other) {
+            (Renderbuffer(a), Renderbuffer(b)) => a.id() == b.id(),
+            (
+                Texture {
+                    texture: a,
+                    level: level_a,
+                    target: target_a,
+                    layer: layer_a,
+                },
+                Texture {
+                    texture: b,
+                    level: level_b,
+                    target: target_b,
+                    layer: layer_b,
+                },
+            ) => {
+                a.id() == b.id() && level_a == level_b && target_a == target_b && layer_a == layer_b
+            },
+            _ => false,
         }
     }
 
@@ -317,6 +346,7 @@ impl WebGLFramebuffer {
             Some(WebGLFramebufferAttachment::Texture {
                 texture: att_tex,
                 level,
+                ..
             }) => match att_tex.image_info_at_face(0, *level as u32) {
                 Some(info) => (
                     Some(info.internal_format().as_gl_constant()),
@@ -344,6 +374,23 @@ impl WebGLFramebuffer {
         }
 
         Ok(())
+    }
+
+    /// Whether one image sits behind two color attachment points, which WebGL 2 reports as
+    /// `FRAMEBUFFER_UNSUPPORTED`.
+    fn has_shared_color_image(&self) -> bool {
+        self.colors.iter().enumerate().any(|(i, slot)| {
+            let slot = slot.borrow();
+            let Some(att) = slot.as_ref() else {
+                return false;
+            };
+            self.colors[..i].iter().any(|earlier| {
+                earlier
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|earlier| earlier.is_same_image(att))
+            })
+        })
     }
 
     pub(crate) fn update_status(&self) {
@@ -378,14 +425,11 @@ impl WebGLFramebuffer {
             // DEPTH_STENCIL_ATTACHMENT generates an INVALID_OPERATION error.
             // -- WebGL 2.0 spec, 4.1.5 Framebuffer Object Attachments
             WebGLVersion::WebGL2 => {
-                use WebGLFramebufferAttachment::{Renderbuffer, Texture};
-                match (&*z, &*s) {
-                    (Some(Renderbuffer(a)), Some(Renderbuffer(b))) => a.id() == b.id(),
-                    (Some(Texture { texture: a, .. }), Some(Texture { texture: b, .. })) => {
-                        a.id() == b.id()
-                    },
-                    _ => !has_z || !has_s,
-                }
+                let depth_stencil_match = match (&*z, &*s) {
+                    (Some(z), Some(s)) => z.is_same_image(s),
+                    _ => true,
+                };
+                depth_stencil_match && !self.has_shared_color_image()
             },
         };
         if !is_supported {
@@ -752,7 +796,9 @@ impl WebGLFramebuffer {
                         Some(rb.id()),
                     ));
                 },
-                WebGLFramebufferAttachment::Texture { ref texture, level } => {
+                WebGLFramebufferAttachment::Texture {
+                    ref texture, level, ..
+                } => {
                     texture.attach_to_framebuffer(self);
                     webgl_object.send_command(WebGLCommand::FramebufferTexture2D(
                         self.target.get().unwrap(),
@@ -863,6 +909,8 @@ impl WebGLFramebuffer {
                 *binding.borrow_mut() = Some(WebGLFramebufferAttachment::Texture {
                     texture: Dom::from_ref(texture),
                     level,
+                    target: textarget,
+                    layer: None,
                 });
                 self.mirror_alias(binding, attachment);
                 texture.attach_to_framebuffer(self);
@@ -908,12 +956,14 @@ impl WebGLFramebuffer {
 
         let tex_id = match texture {
             Some(texture) => {
-                let (max_level, layer_count) = match texture.target() {
-                    Some(constants::TEXTURE_3D) => (
+                let (target, max_level, layer_count) = match texture.target() {
+                    Some(target @ constants::TEXTURE_3D) => (
+                        target,
                         context.limits().max_3d_texture_size.ilog2(),
                         context.limits().max_3d_texture_size,
                     ),
-                    Some(constants::TEXTURE_2D_ARRAY) => (
+                    Some(target @ constants::TEXTURE_2D_ARRAY) => (
+                        target,
                         context.limits().max_tex_size.ilog2(),
                         context.limits().max_array_texture_layers,
                     ),
@@ -930,6 +980,8 @@ impl WebGLFramebuffer {
                 *binding.borrow_mut() = Some(WebGLFramebufferAttachment::Texture {
                     texture: Dom::from_ref(texture),
                     level,
+                    target,
+                    layer: Some(layer),
                 });
                 self.mirror_alias(binding, attachment);
                 texture.attach_to_framebuffer(self);
