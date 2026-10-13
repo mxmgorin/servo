@@ -343,6 +343,10 @@ impl AudioNodeEngine for BiquadFilterNode {
         AudioNodeType::BiquadFilterNode
     }
 
+    fn sounds_without_input(&self) -> bool {
+        true
+    }
+
     fn process(&mut self, mut inputs: Chunk, info: &BlockInfo) -> Chunk {
         debug_assert!(inputs.len() == 1);
         self.state

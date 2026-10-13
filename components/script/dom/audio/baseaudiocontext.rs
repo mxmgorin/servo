@@ -5,6 +5,7 @@
 use std::cell::Cell;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
+use std::rc::{Rc, Weak};
 use std::sync::{Arc, Mutex};
 
 use dom_struct::dom_struct;
@@ -32,7 +33,7 @@ use script_bindings::codegen::GenericBindings::PeriodicWaveBinding::PeriodicWave
 use script_bindings::codegen::GenericBindings::StereoPannerNodeBinding::StereoPannerNodeMethods;
 use servo_base::id::PipelineId;
 use servo_media::audio::context::{
-    AudioContext, AudioContextOptions, OfflineAudioContextOptions, ProcessingState,
+    AudioContext, AudioContextOptions, NodeHandle, OfflineAudioContextOptions, ProcessingState,
     RealTimeAudioContextOptions,
 };
 use servo_media::audio::decoder::AudioDecoderCallbacksBuilder;
@@ -123,6 +124,10 @@ pub(crate) struct BaseAudioContext {
     /// <https://webaudio.github.io/web-audio-api/#pendingresumepromises>
     pending_resume_promises: DomRefCell<Vec<TracedPromise>>,
     decode_resolvers: DomRefCell<HashMap<String, DecodeResolver>>,
+    /// Graph node handles, so a node and its AudioParams share one.
+    #[no_trace]
+    #[ignore_malloc_size_of = "servo_media"]
+    node_handles: DomRefCell<HashMap<NodeId, Weak<NodeHandle>>>,
     /// <https://webaudio.github.io/web-audio-api/#dom-baseaudiocontext-samplerate>
     sample_rate: f32,
     /// <https://webaudio.github.io/web-audio-api/#dom-baseaudiocontext-state>
@@ -160,6 +165,7 @@ impl BaseAudioContext {
             in_flight_resume_promises_queue: Default::default(),
             pending_resume_promises: Default::default(),
             decode_resolvers: Default::default(),
+            node_handles: Default::default(),
             sample_rate,
             state: Cell::new(AudioContextState::Suspended),
             channel_count: channel_count.into(),
@@ -173,6 +179,19 @@ impl BaseAudioContext {
 
     pub(crate) fn audio_context_impl(&self) -> Arc<Mutex<AudioContext>> {
         self.audio_context_impl.clone()
+    }
+
+    /// Returns the handle of graph node `id`, shared by everything script holds for it;
+    /// the node is released once the last clone is dropped.
+    pub(crate) fn node_handle(&self, id: NodeId) -> Rc<NodeHandle> {
+        let mut handles = self.node_handles.borrow_mut();
+        if let Some(handle) = handles.get(&id).and_then(Weak::upgrade) {
+            return handle;
+        }
+        handles.retain(|_, handle| handle.strong_count() > 0);
+        let handle = Rc::new(self.audio_context_impl.lock().unwrap().node_handle(id));
+        handles.insert(id, Rc::downgrade(&handle));
+        handle
     }
 
     pub(crate) fn destination_node(&self) -> NodeId {
