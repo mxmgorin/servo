@@ -95,9 +95,15 @@ fn impl_audio_scheduled_source_node(ast: &syn::DeriveInput) -> proc_macro2::Toke
                 if self.start_at.is_none() {
                     return;
                 }
+                self.ended = true;
                 if let Some(cb) = self.onended_callback.take() {
                     cb.0()
                 }
+            }
+
+            /// Whether the source has been started and has not ended yet.
+            fn may_play(&self) -> bool {
+                self.start_at.is_some() && !self.ended
             }
 
             fn handle_source_node_message(&mut self, message: AudioScheduledSourceNodeMessage, sample_rate: f32) {

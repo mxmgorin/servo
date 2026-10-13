@@ -2,11 +2,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+use std::cell::Cell;
 use std::cmp::min;
 use std::sync::Arc;
 
 use dom_struct::dom_struct;
 use js::context::JSContext;
+use js::jsapi::GCReason;
+use js::rust::wrappers2::JS_GC;
 use js::rust::{CustomAutoRooterGuard, HandleObject};
 use js::typedarray::{Float32, Float32Array, HeapFloat32Array};
 use script_bindings::cell::DomRefCell;
@@ -29,6 +32,26 @@ use crate::realms::enter_auto_realm;
 // https://webaudio.github.io/web-audio-api/#dom-baseaudiocontext-createbuffer
 pub(crate) const MIN_SAMPLE_RATE: f32 = 8000.;
 pub(crate) const MAX_SAMPLE_RATE: f32 = 192000.;
+
+/// Samples moved out of JS since the last collection this file asked for, past which it asks
+/// for another: the GC no longer sees them, so a page whose only garbage is audio never collects.
+const ACQUIRED_BYTES_PER_GC: usize = 16 * 1024 * 1024;
+
+thread_local! {
+    static ACQUIRED_BYTES: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Count samples taken out of JS, collecting once they pass [`ACQUIRED_BYTES_PER_GC`].
+#[expect(unsafe_code)]
+fn note_acquired_bytes(cx: &mut JSContext, bytes: usize) {
+    let total = ACQUIRED_BYTES.get() + bytes;
+    if total < ACQUIRED_BYTES_PER_GC {
+        ACQUIRED_BYTES.set(total);
+        return;
+    }
+    ACQUIRED_BYTES.set(0);
+    unsafe { JS_GC(cx, GCReason::TOO_MUCH_MALLOC) };
+}
 
 /// The AudioBuffer keeps its data either in js_channels
 /// or in shared_channels if js_channels buffers are detached.
@@ -207,8 +230,10 @@ impl AudioBuffer {
     pub(crate) fn get_channels(&self, cx: &mut JSContext) -> Option<Arc<ServoMediaAudioBuffer>> {
         if self.shared_channels.borrow().is_none() {
             let channels = self.acquire_contents(cx).map(Arc::new);
-            if channels.is_some() {
+            if let Some(acquired) = &channels {
+                let bytes = acquired.buffers.iter().map(Vec::len).sum::<usize>() * size_of::<f32>();
                 *self.shared_channels.safe_borrow_mut(cx.no_gc()) = channels;
+                note_acquired_bytes(cx, bytes);
             }
         }
         self.shared_channels.borrow().clone()

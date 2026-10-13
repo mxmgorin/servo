@@ -29,6 +29,7 @@ pub(crate) struct ConstantSourceNode {
     start_at: Option<Tick>,
     stop_at: Option<Tick>,
     onended_callback: Option<OnEndedCallback>,
+    ended: bool,
 }
 
 impl ConstantSourceNode {
@@ -39,6 +40,7 @@ impl ConstantSourceNode {
             start_at: None,
             stop_at: None,
             onended_callback: None,
+            ended: false,
         }
     }
 
@@ -50,6 +52,10 @@ impl ConstantSourceNode {
 impl AudioNodeEngine for ConstantSourceNode {
     fn node_type(&self) -> AudioNodeType {
         AudioNodeType::ConstantSourceNode
+    }
+
+    fn sounds_without_input(&self) -> bool {
+        self.may_play()
     }
 
     fn process(&mut self, mut inputs: Chunk, info: &BlockInfo) -> Chunk {
