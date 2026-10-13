@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use std::cell::Cell;
+use std::rc::Rc;
 
 use dom_struct::dom_struct;
 use js::context::JSContext;
@@ -14,6 +15,7 @@ use servo_media::audio::audio_node::{
     AudioNodeInit, AudioNodeMessage, ChannelCountMode as ServoMediaChannelCountMode, ChannelInfo,
     ChannelInterpretation as ServoMediaChannelInterpretation,
 };
+use servo_media::audio::context::NodeHandle;
 use servo_media::audio::graph::NodeId;
 
 use crate::conversions::Convert;
@@ -37,8 +39,10 @@ pub(crate) const MAX_CHANNEL_COUNT: u32 = 32;
 #[dom_struct]
 pub(crate) struct AudioNode {
     eventtarget: EventTarget,
+    /// Shared with the node's AudioParams, so the graph node outlives all of them.
     #[no_trace]
-    node_id: Option<NodeId>,
+    #[ignore_malloc_size_of = "servo_media"]
+    node: Option<Rc<NodeHandle>>,
     context: Dom<BaseAudioContext>,
     number_of_inputs: u32,
     number_of_outputs: u32,
@@ -57,7 +61,7 @@ impl AudioNode {
     ) -> AudioNode {
         AudioNode {
             eventtarget: EventTarget::new_inherited(),
-            node_id,
+            node: node_id.map(|id| context.node_handle(id)),
             context: Dom::from_ref(context),
             number_of_inputs,
             number_of_outputs,
@@ -102,7 +106,7 @@ impl AudioNode {
     }
 
     pub(crate) fn message(&self, message: AudioNodeMessage) {
-        if let Some(node_id) = self.node_id {
+        if let Some(node_id) = self.node_id() {
             self.context
                 .audio_context_impl()
                 .lock()
@@ -112,7 +116,7 @@ impl AudioNode {
     }
 
     pub(crate) fn node_id(&self) -> Option<NodeId> {
-        self.node_id
+        self.node.as_ref().map(|node| node.id())
     }
 }
 

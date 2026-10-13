@@ -57,6 +57,7 @@ pub(crate) struct OscillatorNode {
     stop_at: Option<Tick>,
     /// The ended event callback.
     onended_callback: Option<OnEndedCallback>,
+    ended: bool,
 }
 
 impl OscillatorNode {
@@ -70,6 +71,7 @@ impl OscillatorNode {
             start_at: None,
             stop_at: None,
             onended_callback: None,
+            ended: false,
         }
     }
 
@@ -110,6 +112,10 @@ impl OscillatorNode {
 impl AudioNodeEngine for OscillatorNode {
     fn node_type(&self) -> AudioNodeType {
         AudioNodeType::OscillatorNode
+    }
+
+    fn sounds_without_input(&self) -> bool {
+        self.may_play()
     }
 
     fn process(&mut self, mut inputs: Chunk, info: &BlockInfo) -> Chunk {

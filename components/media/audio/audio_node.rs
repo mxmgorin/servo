@@ -236,6 +236,12 @@ pub(crate) trait AudioNodeEngine: Send + AudioNodeCommon {
     fn set_listenerdata(&mut self, _: Block) {
         panic!("can't accept listener connections")
     }
+
+    /// Whether the node may still output sound with nothing connected to its inputs:
+    /// a source that has yet to end, or a node with a tail.
+    fn sounds_without_input(&self) -> bool {
+        false
+    }
 }
 
 #[derive(MallocSizeOf)]

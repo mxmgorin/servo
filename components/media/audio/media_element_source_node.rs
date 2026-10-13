@@ -54,6 +54,10 @@ impl AudioNodeEngine for MediaElementSourceNode {
         AudioNodeType::MediaElementSourceNode
     }
 
+    fn sounds_without_input(&self) -> bool {
+        true
+    }
+
     fn process(&mut self, mut inputs: Chunk, _info: &BlockInfo) -> Chunk {
         debug_assert!(inputs.is_empty());
 

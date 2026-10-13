@@ -107,6 +107,10 @@ impl AudioNodeEngine for DelayNode {
         AudioNodeType::DelayNode
     }
 
+    fn sounds_without_input(&self) -> bool {
+        true
+    }
+
     fn process(&mut self, inputs: Chunk, info: &BlockInfo) -> Chunk {
         let Some(delay_writer) = &mut self.delay_writer else {
             error!("No DelayWriter initialized!");

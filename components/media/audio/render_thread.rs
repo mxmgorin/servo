@@ -38,6 +38,7 @@ pub enum AudioRenderThreadMsg {
     CreateNode(AudioNodeInit, Sender<Option<NodeId>>, ChannelInfo),
     ConnectPorts(PortId<OutputPort>, PortId<InputPort>),
     MessageNode(NodeId, AudioNodeMessage),
+    ReleaseNode(NodeId),
     Resume(Sender<StateChangeResult>),
     Suspend(Sender<StateChangeResult>),
     Close(Sender<StateChangeResult>),
@@ -312,6 +313,7 @@ impl AudioRenderThread {
                 AudioRenderThreadMsg::MessageNode(id, msg) => {
                     context.graph.node_mut(id).message(msg, sample_rate)
                 },
+                AudioRenderThreadMsg::ReleaseNode(id) => context.graph.release_node(id),
                 AudioRenderThreadMsg::SinkNeedData => {
                     // Do nothing. This will simply unblock the thread so we
                     // can restart the non-blocking event loop.

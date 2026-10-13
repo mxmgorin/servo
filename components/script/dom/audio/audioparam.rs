@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::mpsc;
 
 use dom_struct::dom_struct;
@@ -10,6 +11,7 @@ use js::context::JSContext;
 use script_bindings::cformat;
 use script_bindings::reflector::{Reflector, reflect_dom_object};
 use servo_media::audio::audio_node::{AudioNodeMessage, AudioNodeType};
+use servo_media::audio::context::NodeHandle;
 use servo_media::audio::graph::NodeId;
 use servo_media::audio::param::{ParamRate, ParamType, RampKind, UserAutomationEvent};
 
@@ -28,7 +30,8 @@ pub(crate) struct AudioParam {
     reflector_: Reflector,
     context: Dom<BaseAudioContext>,
     #[no_trace]
-    node: Option<NodeId>,
+    #[ignore_malloc_size_of = "servo_media"]
+    node: Option<Rc<NodeHandle>>,
     #[no_trace]
     node_type: AudioNodeType,
     #[no_trace]
@@ -54,7 +57,7 @@ impl AudioParam {
         AudioParam {
             reflector_: Reflector::new(),
             context: Dom::from_ref(context),
-            node,
+            node: node.map(|id| context.node_handle(id)),
             node_type,
             param,
             automation_rate: Cell::new(automation_rate),
@@ -97,7 +100,7 @@ impl AudioParam {
     }
 
     fn message_node(&self, message: AudioNodeMessage) {
-        if let Some(node_id) = self.node {
+        if let Some(node_id) = self.node_id() {
             self.context
                 .audio_context_impl()
                 .lock()
@@ -111,7 +114,7 @@ impl AudioParam {
     }
 
     pub(crate) fn node_id(&self) -> Option<NodeId> {
-        self.node
+        self.node.as_ref().map(|node| node.id())
     }
 
     pub(crate) fn param_type(&self) -> ParamType {

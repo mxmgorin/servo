@@ -231,6 +231,14 @@ impl AudioContext {
     // Stop audio processing and close render thread.
     make_state_change!(close, Closed, Close);
 
+    /// Wrap a node in a handle that releases it when dropped.
+    pub fn node_handle(&self, id: NodeId) -> NodeHandle {
+        NodeHandle {
+            id,
+            sender: self.sender.clone(),
+        }
+    }
+
     pub fn message_node(&self, id: NodeId, msg: AudioNodeMessage) {
         let _ = self.sender.send(AudioRenderThreadMsg::MessageNode(id, msg));
     }
@@ -317,6 +325,26 @@ impl AudioContext {
 
     fn set_mute(&self, val: bool) {
         let _ = self.sender.send(AudioRenderThreadMsg::SetMute(val));
+    }
+}
+
+/// A script-side owner of a graph node; dropping it tells the render thread that script
+/// can no longer reach the node.
+pub struct NodeHandle {
+    id: NodeId,
+    sender: Sender<AudioRenderThreadMsg>,
+}
+
+impl NodeHandle {
+    pub fn id(&self) -> NodeId {
+        self.id
+    }
+}
+
+impl Drop for NodeHandle {
+    fn drop(&mut self) {
+        // A closed context has no graph left to release from.
+        let _ = self.sender.send(AudioRenderThreadMsg::ReleaseNode(self.id));
     }
 }
 

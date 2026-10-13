@@ -119,6 +119,8 @@ pub struct AudioGraph {
     dest_id: NodeId,
     dests: Vec<NodeId>,
     listener_id: NodeId,
+    /// Nodes script can no longer reach, kept until they cannot affect the output.
+    released: Vec<NodeId>,
 }
 
 pub(crate) struct Node {
@@ -190,12 +192,50 @@ impl AudioGraph {
             dest_id,
             dests: vec![dest_id],
             listener_id,
+            released: Vec::new(),
         }
     }
 
     /// Create a node, obtain its id
     pub(crate) fn add_node(&mut self, node: Box<dyn AudioNodeEngine>) -> NodeId {
         NodeId(self.graph.add_node(Node::new(node)))
+    }
+
+    /// Mark a node that script can no longer reach, so it is removed once it cannot
+    /// affect the output. The destinations and the listener are never removed.
+    pub fn release_node(&mut self, node: NodeId) {
+        if node == self.listener_id || self.dests.contains(&node) {
+            return;
+        }
+        if self.graph.contains_node(node.0) && !self.released.contains(&node) {
+            self.released.push(node);
+        }
+    }
+
+    /// Remove released nodes that can no longer affect the output: those feeding nothing,
+    /// and those with no inputs that cannot sound on their own. Script cannot connect a
+    /// released node again, so both states are final.
+    fn remove_released_nodes(&mut self) {
+        let graph = &mut self.graph;
+        self.released.retain(|node| {
+            let ix = node.0;
+            let feeds_nothing = graph.edges(ix).next().is_none();
+            let silent = graph
+                .edges_directed(ix, Direction::Incoming)
+                .next()
+                .is_none() &&
+                !graph[ix].node.borrow().sounds_without_input();
+            if feeds_nothing || silent {
+                graph.remove_node(ix);
+                return false;
+            }
+            true
+        });
+    }
+
+    /// The number of nodes in the graph.
+    pub fn node_count(&self) -> usize {
+        self.graph.node_count()
     }
 
     /// Connect an output port to an input port
@@ -367,6 +407,8 @@ impl AudioGraph {
     /// This implements steps 4.2 and parts of 4.4 from
     /// <https://webaudio.github.io/web-audio-api/#rendering-loop>
     pub fn process(&mut self, info: &BlockInfo) -> Chunk {
+        self.remove_released_nodes();
+
         // Step 4.2. Order the AudioNodes of the BaseAudioContext to be processed.
         let cycle_nodes = self.detect_nodes_in_cycles();
 
@@ -644,5 +686,108 @@ impl Connection {
             output_idx,
             cache: RefCell::new(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio_node::{AudioNodeMessage, AudioScheduledSourceNodeMessage, ChannelInfo};
+    use crate::block::{FRAMES_PER_BLOCK, FRAMES_PER_BLOCK_USIZE, Tick};
+    use crate::buffer_source_node::{
+        AudioBuffer, AudioBufferSourceNode, AudioBufferSourceNodeOptions,
+    };
+    use crate::gain_node::{GainNode, GainNodeOptions};
+
+    const SAMPLE_RATE: f32 = 44100.;
+    const SOURCE_BLOCKS: usize = 2;
+
+    fn buffer_source(graph: &mut AudioGraph, start: bool) -> NodeId {
+        let options = AudioBufferSourceNodeOptions {
+            buffer: Some(
+                AudioBuffer::from_buffer(
+                    vec![0.5; SOURCE_BLOCKS * FRAMES_PER_BLOCK_USIZE],
+                    SAMPLE_RATE,
+                )
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let id = graph.add_node(Box::new(AudioBufferSourceNode::new(
+            options,
+            ChannelInfo::default(),
+        )));
+        if start {
+            graph.node_mut(id).message(
+                AudioNodeMessage::AudioScheduledSourceNode(AudioScheduledSourceNodeMessage::Start(
+                    0.,
+                )),
+                SAMPLE_RATE,
+            );
+        }
+        id
+    }
+
+    fn gain(graph: &mut AudioGraph) -> NodeId {
+        graph.add_node(Box::new(GainNode::new(
+            GainNodeOptions { gain: 1. },
+            ChannelInfo::default(),
+        )))
+    }
+
+    /// Process one block and report whether it was audible.
+    fn render(graph: &mut AudioGraph, block: u64) -> bool {
+        let frame = Tick(block * FRAMES_PER_BLOCK.0);
+        let info = BlockInfo {
+            sample_rate: SAMPLE_RATE,
+            frame,
+            time: frame.0 as f64 / SAMPLE_RATE as f64,
+        };
+        !graph.process(&info).blocks[0].is_silence()
+    }
+
+    #[test]
+    fn released_sources_play_to_their_end_then_go() {
+        let mut graph = AudioGraph::new(2);
+        let baseline = graph.node_count();
+        let mixer = gain(&mut graph);
+        graph.add_edge(mixer.output(0), graph.dest_id().input(0));
+        let sources: Vec<_> = (0..8).map(|_| buffer_source(&mut graph, true)).collect();
+        for &source in &sources {
+            graph.add_edge(source.output(0), mixer.input(0));
+            graph.release_node(source);
+        }
+        graph.release_node(mixer);
+
+        assert!(render(&mut graph, 0));
+        assert_eq!(graph.node_count(), baseline + 1 + sources.len());
+        for block in 1..=SOURCE_BLOCKS as u64 + 1 {
+            render(&mut graph, block);
+        }
+        assert_eq!(graph.node_count(), baseline);
+    }
+
+    #[test]
+    fn released_nodes_stay_while_they_can_sound() {
+        let mut graph = AudioGraph::new(2);
+        let baseline = graph.node_count();
+        let mixer = gain(&mut graph);
+        graph.add_edge(mixer.output(0), graph.dest_id().input(0));
+        let held = buffer_source(&mut graph, false);
+        graph.add_edge(held.output(0), mixer.input(0));
+        let unstarted = buffer_source(&mut graph, false);
+        graph.add_edge(unstarted.output(0), mixer.input(0));
+        graph.release_node(unstarted);
+        graph.release_node(mixer);
+        graph.release_node(graph.dest_id());
+        graph.release_node(graph.listener_id());
+
+        render(&mut graph, 0);
+        assert_eq!(graph.node_count(), baseline + 2);
+
+        graph.release_node(held);
+        render(&mut graph, 1);
+        render(&mut graph, 2);
+        assert_eq!(graph.node_count(), baseline);
     }
 }
