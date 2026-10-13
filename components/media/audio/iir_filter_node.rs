@@ -170,6 +170,10 @@ impl AudioNodeEngine for IIRFilterNode {
         AudioNodeType::IIRFilterNode
     }
 
+    fn sounds_without_input(&self) -> bool {
+        true
+    }
+
     fn process(&mut self, inputs: Chunk, _info: &BlockInfo) -> Chunk {
         debug_assert!(inputs.len() == 1);
 

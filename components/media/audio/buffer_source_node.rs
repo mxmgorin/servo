@@ -104,6 +104,8 @@ pub(crate) struct AudioBufferSourceNode {
     stop_at: Option<Tick>,
     /// The ended event callback.
     pub onended_callback: Option<OnEndedCallback>,
+    /// Whether playback has reached its end.
+    ended: bool,
 }
 
 impl AudioBufferSourceNode {
@@ -125,6 +127,7 @@ impl AudioBufferSourceNode {
             start_when: 0.,
             stop_at: None,
             onended_callback: None,
+            ended: false,
         }
     }
 
@@ -154,6 +157,10 @@ impl AudioBufferSourceNode {
 impl AudioNodeEngine for AudioBufferSourceNode {
     fn node_type(&self) -> AudioNodeType {
         AudioNodeType::AudioBufferSourceNode
+    }
+
+    fn sounds_without_input(&self) -> bool {
+        self.may_play()
     }
 
     fn input_count(&self) -> u32 {
