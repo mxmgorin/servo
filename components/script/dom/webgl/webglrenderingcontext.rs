@@ -822,16 +822,16 @@ impl WebGLRenderingContext {
                         return Ok(None);
                     },
                 };
-                if !image.same_origin(&document.origin()) {
-                    return Err(Error::Security(None));
-                }
-
                 // Vector images are not currently supported here and there are
                 // some open questions in the specification about how to handle them:
                 // See https://github.com/KhronosGroup/WebGL/issues/1503
                 let Some(snapshot) = image.get_raster_image_data() else {
                     return Ok(None);
                 };
+
+                if !image.same_origin(&document.origin()) {
+                    return Err(Error::Security(None));
+                }
 
                 let snapshot = snapshot.into_shared();
                 let size = snapshot.size().cast();
