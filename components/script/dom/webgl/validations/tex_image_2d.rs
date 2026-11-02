@@ -126,6 +126,21 @@ pub(crate) fn validate_internal_format(
     }
 }
 
+/// Returns `format` as a pixel data format this context accepts. Generates
+/// `INVALID_ENUM` otherwise.
+fn validate_format(
+    context: &WebGLRenderingContext,
+    format: u32,
+) -> Result<TexFormat, TexImageValidationError> {
+    match TexFormat::from_gl_constant(format) {
+        Some(format) if format.required_webgl_version() <= context.webgl_version() => Ok(format),
+        _ => {
+            context.webgl_error(InvalidEnum);
+            Err(TexImageValidationError::InvalidTextureFormat)
+        },
+    }
+}
+
 pub(crate) struct CommonTexImage2DValidator<'a> {
     context: &'a WebGLRenderingContext,
     target: u32,
@@ -134,6 +149,9 @@ pub(crate) struct CommonTexImage2DValidator<'a> {
     width: i32,
     height: i32,
     border: i32,
+    /// `internal_format` holds a sub-image call's `format`, matched against the
+    /// existing image later.
+    sub_image: bool,
 }
 
 pub(crate) struct CommonTexImage2DValidatorResult {
@@ -171,7 +189,11 @@ impl WebGLValidator for CommonTexImage2DValidator<'_> {
         };
 
         let texture = bound_texture(self.context, target)?;
-        let internal_format = validate_internal_format(self.context, self.internal_format)?;
+        let internal_format = if self.sub_image {
+            validate_format(self.context, self.internal_format)?
+        } else {
+            validate_internal_format(self.context, self.internal_format)?
+        };
 
         // GL_INVALID_VALUE is generated if target is one of the six cube map 2D
         // image targets and the width and height parameters are not equal.
@@ -256,6 +278,7 @@ impl<'a> CommonTexImage2DValidator<'a> {
             width,
             height,
             border,
+            sub_image: false,
         }
     }
 }
@@ -293,6 +316,23 @@ impl<'a> TexImage2DValidator<'a> {
             format,
             data_type,
         }
+    }
+
+    /// Validates a sub-image upload of `format` and `data_type` into the bound texture.
+    pub(crate) fn new_sub_image(
+        context: &'a WebGLRenderingContext,
+        target: u32,
+        level: i32,
+        width: i32,
+        height: i32,
+        format: u32,
+        data_type: u32,
+    ) -> Self {
+        let mut validator = Self::new(
+            context, target, level, format, width, height, 0, format, data_type,
+        );
+        validator.common_validator.sub_image = true;
+        validator
     }
 }
 
