@@ -469,8 +469,10 @@ impl WebGLExtensions {
     }
 
     pub(crate) fn effective_type(&self, type_: u32) -> u32 {
+        // WebGL 2 runs on a GL 3 or GLES 3 context, whose sized half-float formats take HALF_FLOAT.
         if type_ == OESTextureHalfFloatConstants::HALF_FLOAT_OES &&
-            !self.supports_gl_extension("GL_OES_texture_half_float")
+            (self.webgl_version == WebGLVersion::WebGL2 ||
+                !self.supports_gl_extension("GL_OES_texture_half_float"))
         {
             return glow::HALF_FLOAT;
         }
