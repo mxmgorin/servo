@@ -1072,7 +1072,7 @@ impl WebGLRenderingContext {
         }
 
         // The unsized format must be compatible with the sized internal format
-        debug_assert!(!format.is_sized());
+        debug_assert_eq!(format, format.to_unsized());
         if format != image_info.internal_format().to_unsized() {
             return self.webgl_error(InvalidOperation);
         }
@@ -5043,8 +5043,8 @@ impl WebGLRenderingContextMethods<crate::DomTypeHolder> for WebGLRenderingContex
         data_type: u32,
         pixels: CustomAutoRooterGuard<Option<ArrayBufferView>>,
     ) -> ErrorResult {
-        let validator = TexImage2DValidator::new(
-            self, target, level, format, width, height, 0, format, data_type,
+        let validator = TexImage2DValidator::new_sub_image(
+            self, target, level, width, height, format, data_type,
         );
         let TexImage2DValidatorResult {
             texture,
@@ -5145,14 +5145,12 @@ impl WebGLRenderingContextMethods<crate::DomTypeHolder> for WebGLRenderingContex
             None => return Ok(()),
         };
 
-        let validator = TexImage2DValidator::new(
+        let validator = TexImage2DValidator::new_sub_image(
             self,
             target,
             level,
-            format,
             pixels.size().width as i32,
             pixels.size().height as i32,
-            0,
             format,
             data_type,
         );
