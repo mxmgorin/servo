@@ -1208,22 +1208,9 @@ impl WebViewRenderer {
         }
     }
 
-    /// Get the transform from page to device pixels of this [`WebViewRenderer`]
-    /// incorporating the device pixel ratio, page zoom, and pinch zoom.
-    pub(crate) fn root_transform(&self) -> LayoutTransform {
-        let pinch_zoom_transform = self.pinch_zoom.transform().to_untyped();
-        let device_pixels_per_page_pixel_not_including_pinch_zoom = self
-            .device_pixels_per_page_pixel_not_including_pinch_zoom()
-            .get();
-
-        LayoutTransform::scale(
-            device_pixels_per_page_pixel_not_including_pinch_zoom,
-            device_pixels_per_page_pixel_not_including_pinch_zoom,
-            1.0,
-        )
-        .then(&LayoutTransform::from_untyped(
-            &pinch_zoom_transform.to_3d(),
-        ))
+    /// The pinch zoom transform of this [`WebViewRenderer`], in device pixels.
+    pub(crate) fn pinch_zoom_transform(&self) -> LayoutTransform {
+        LayoutTransform::from_untyped(&self.pinch_zoom.transform().to_untyped().to_3d())
     }
 }
 
