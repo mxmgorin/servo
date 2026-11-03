@@ -1140,16 +1140,10 @@ impl DocumentEventHandler {
                     .dispatch(cx, node.upcast(), false);
 
                 // If neither the `mousedown` nor the `pointerdown` event had `preventDefault()`
-                // called on them, call the default mousdown handler on retargeted node
-                // (`mouse_event.target` is mutated by `dispatch` above).
-                if result &&
-                    pointer_event_result &&
-                    let Some(node) = mouse_event
-                        .upcast::<Event>()
-                        .GetTarget()
-                        .and_then(DomRoot::downcast::<Node>)
-                {
-                    let editing_context = document.editing_context(cx, &node);
+                // called on them, call the default mousedown handler from the hit node: a text
+                // control in a shadow tree is only reachable from inside that tree.
+                if result && pointer_event_result {
+                    let editing_context = document.editing_context(cx, node);
                     editing_context.handle_mousedown_event(cx, &mouse_event, &hit_test_result);
                 }
 
