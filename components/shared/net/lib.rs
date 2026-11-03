@@ -634,6 +634,10 @@ impl ResourceThreads {
         let _ = receiver.recv();
     }
 
+    pub fn persist(&self) {
+        let _ = self.core_thread.send(CoreResourceMsg::Persist);
+    }
+
     pub fn clear_cookies(&self) {
         let (sender, receiver) = generic_channel::channel().unwrap();
         let _ = self
@@ -865,6 +869,8 @@ pub enum CoreResourceMsg {
     /// Message forwarded to file manager's handler
     ToFileManager(FileManagerThreadMsg),
     TotalSizeOfInFlightKeepAliveRecords(PipelineId, GenericSender<u64>),
+    /// Write cookies, the HSTS list and the auth cache to the config directory
+    Persist,
     /// Break the load handler loop, send a reply when done cleaning up local resources
     /// and exit
     Exit(GenericOneshotSender<()>),

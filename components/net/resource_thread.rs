@@ -384,6 +384,19 @@ impl ResourceChannelManager {
         cancellation_listener
     }
 
+    /// Writes the state kept across restarts to the config directory, if there is one.
+    fn persist(&self, http_state: &HttpState) {
+        let Some(ref config_dir) = self.config_dir else {
+            return;
+        };
+        let auth_cache = http_state.auth_cache.read();
+        servo_base::write_json_to_file(&*auth_cache, config_dir, "auth_cache.json");
+        let jar = http_state.cookie_jar.read();
+        servo_base::write_json_to_file(&*jar, config_dir, "cookie_jar.json");
+        let hsts = http_state.hsts_list.read();
+        servo_base::write_json_to_file(&*hsts, config_dir, "hsts_list.json");
+    }
+
     /// Returns false if the thread should exit.
     fn process_msg(
         &mut self,
@@ -647,15 +660,9 @@ impl ResourceChannelManager {
                     .unwrap_or_default();
                 sender.send_or_ignore(total);
             },
+            CoreResourceMsg::Persist => self.persist(http_state),
             CoreResourceMsg::Exit(sender) => {
-                if let Some(ref config_dir) = self.config_dir {
-                    let auth_cache = http_state.auth_cache.read();
-                    servo_base::write_json_to_file(&*auth_cache, config_dir, "auth_cache.json");
-                    let jar = http_state.cookie_jar.read();
-                    servo_base::write_json_to_file(&*jar, config_dir, "cookie_jar.json");
-                    let hsts = http_state.hsts_list.read();
-                    servo_base::write_json_to_file(&*hsts, config_dir, "hsts_list.json");
-                }
+                self.persist(http_state);
                 self.resource_manager.exit();
 
                 let _ = sender.send(());
