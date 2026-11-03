@@ -5297,21 +5297,9 @@ impl Document {
         debug_assert!(cssom_stylesheet.is_constructed());
 
         let sheet = cssom_stylesheet.style_stylesheet().clone();
-        let insertion_point = {
-            let stylesheets = &mut *self.stylesheets.borrow_mut();
-
-            stylesheets
-                .iter()
-                .last()
-                .map(|(sheet, _origin)| sheet)
-                .cloned()
-        };
 
         if self.has_browsing_context() {
-            self.add_stylesheet_to_stylist(
-                sheet.clone(),
-                insertion_point.as_ref().map(|s| s.sheet.clone()),
-            );
+            self.add_stylesheet_to_stylist(sheet.clone(), None);
         }
 
         let stylesheets = &mut *self.stylesheets.borrow_mut();
@@ -5319,7 +5307,7 @@ impl Document {
             StylesheetSource::Constructed(Dom::from_ref(cssom_stylesheet)),
             StylesheetSetRef::Document(stylesheets),
             sheet,
-            insertion_point,
+            None,
             self.style_shared_author_lock(),
         );
     }
