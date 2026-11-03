@@ -21,7 +21,7 @@ pub mod threadpool;
 mod unicode_block;
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 
 use log::{trace, warn};
@@ -52,20 +52,24 @@ where
     }
 }
 
+/// Writes `data` as JSON to `filename` in `config_dir`, replacing the file only once
+/// the whole write succeeded. Failures are logged.
 pub fn write_json_to_file<T>(data: &T, config_dir: &Path, filename: &str)
 where
     T: Serialize,
 {
     let path = config_dir.join(filename);
-    let display = path.display();
-
-    let mut file = match File::create(&path) {
-        Err(why) => panic!("couldn't create {}: {}", display, why),
-        Ok(file) => file,
+    let partial = config_dir.join(format!("{filename}.partial"));
+    let write = || -> std::io::Result<()> {
+        let mut writer = BufWriter::new(File::create(&partial)?);
+        serde_json::to_writer_pretty(&mut writer, data)?;
+        writer.flush()?;
+        std::fs::rename(&partial, &path)
     };
-    let mut writer = BufWriter::new(&mut file);
-    serde_json::to_writer_pretty(&mut writer, data).expect("Could not serialize to file");
-    trace!("successfully wrote to {display}");
+    match write() {
+        Ok(()) => trace!("successfully wrote to {}", path.display()),
+        Err(why) => warn!("couldn't write {}: {}", path.display(), why),
+    }
 }
 
 /// A struct for denoting the age of messages; prevents race conditions.

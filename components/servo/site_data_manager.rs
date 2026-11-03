@@ -228,6 +228,13 @@ impl SiteDataManager {
         }
     }
 
+    /// Queues a write of the cookies, HSTS list and HTTP auth cache to the config
+    /// directory, as shutdown does; returns without waiting. Private browsing state
+    /// is never written.
+    pub fn persist(&self) {
+        self.public_resource_threads.persist();
+    }
+
     /// Clears all cookies from both the public and private cookie jars.
     ///
     /// An optional callback is provided for async operation.
