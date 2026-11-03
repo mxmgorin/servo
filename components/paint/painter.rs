@@ -45,7 +45,8 @@ use webrender::{
     ShaderPrecacheFlags, Transaction, UploadMethod,
 };
 use webrender_api::units::{
-    DevicePixel, DevicePoint, LayoutPoint, LayoutRect, LayoutSize, LayoutVector2D, WorldPoint,
+    DevicePixel, DevicePoint, LayoutPoint, LayoutRect, LayoutSize, LayoutTransform, LayoutVector2D,
+    WorldPoint,
 };
 use webrender_api::{
     self, BuiltDisplayList, BuiltDisplayListDescriptor, ColorF, DirtyRect, DisplayListPayload,
@@ -665,7 +666,7 @@ impl Painter {
                 }
                 Some(PropertyValue {
                     key: webview_renderer.pinch_zoom_property_binding_key(),
-                    value: webview_renderer.root_transform(),
+                    value: webview_renderer.pinch_zoom_transform(),
                 })
             })
             .collect();
@@ -707,17 +708,31 @@ impl Painter {
                 continue;
             };
 
-            let transform = webview_renderer.root_transform();
-            let property_binding = PropertyBinding::Binding(
-                webview_renderer.pinch_zoom_property_binding_key(),
-                transform,
-            );
-
-            let webview_reference_frame = builder.push_reference_frame(
+            let pinch_zoom_reference_frame = builder.push_reference_frame(
                 LayoutPoint::zero(),
                 root_reference_frame,
                 TransformStyle::Flat,
-                property_binding,
+                PropertyBinding::Binding(
+                    webview_renderer.pinch_zoom_property_binding_key(),
+                    webview_renderer.pinch_zoom_transform(),
+                ),
+                ReferenceFrameKind::Transform {
+                    is_2d_scale_translation: true,
+                    should_snap: true,
+                    paired_with_perspective: false,
+                },
+            );
+
+            // WebRender snaps as if a property binding were the identity, so the
+            // static device pixel scale needs a reference frame of its own.
+            let scale = webview_renderer
+                .device_pixels_per_page_pixel_not_including_pinch_zoom()
+                .get();
+            let webview_reference_frame = builder.push_reference_frame(
+                LayoutPoint::zero(),
+                pinch_zoom_reference_frame,
+                TransformStyle::Flat,
+                PropertyBinding::Value(LayoutTransform::scale(scale, scale, 1.0)),
                 ReferenceFrameKind::Transform {
                     is_2d_scale_translation: true,
                     should_snap: true,
