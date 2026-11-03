@@ -248,13 +248,11 @@ impl ShadowRoot {
         let stylesheets = &mut self.author_styles.borrow_mut().stylesheets;
         let sheet = cssom_stylesheet.style_stylesheet().clone();
 
-        let insertion_point = stylesheets.iter().last().cloned();
-
         DocumentOrShadowRoot::add_stylesheet(
             StylesheetSource::Constructed(Dom::from_ref(cssom_stylesheet)),
             StylesheetSetRef::Author(stylesheets),
             sheet,
-            insertion_point,
+            None,
             self.document.style_shared_author_lock(),
         );
     }
