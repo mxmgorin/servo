@@ -1227,6 +1227,11 @@ impl WebViewRenderer {
         ))
     }
 
+    /// The pinch zoom transform of this [`WebViewRenderer`], in device pixels.
+    pub(crate) fn pinch_zoom_transform(&self) -> LayoutTransform {
+        LayoutTransform::from_untyped(&self.pinch_zoom.transform().to_untyped().to_3d())
+    }
+
     /// If the pipeline is in the current frame tree, find its parent [`PipelineId`] and
     /// [`PipelineDetails`]. If it is not in the current frame tree return `None`.
     pub(crate) fn parent_pipeline(
