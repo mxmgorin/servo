@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use js::rust::{JSEngine, JSEngineHandle};
 
+use crate::dom::types::SharedWorker;
+
 static JS_ENGINE: Mutex<Option<JSEngineHandle>> = Mutex::new(None);
 
 pub(crate) fn current_js_engine_handle() -> JSEngineHandle {
@@ -28,6 +30,8 @@ impl Drop for JSEngineSetup {
     fn drop(&mut self) {
         *JS_ENGINE.lock().unwrap() = None;
 
+        // Shared workers outlive their documents, so nothing else ends their runtimes.
+        SharedWorker::terminate_all();
         while !self.0.can_shutdown() {
             thread::sleep(Duration::from_millis(50));
         }

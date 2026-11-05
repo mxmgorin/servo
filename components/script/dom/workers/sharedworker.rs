@@ -411,6 +411,20 @@ impl SharedWorker {
                 .send(SharedWorkerControlMsg::SetNetworkOnlineState(online));
         }
     }
+
+    /// Ask every living shared worker to close; each exits on its own thread.
+    pub(crate) fn terminate_all() {
+        let (workers, _ready) = &*SHARED_WORKERS;
+        let workers = workers.lock().expect("SharedWorker registry poisoned");
+        for entry in workers.iter() {
+            let SharedWorkerRegistryState::Created(registration) = &entry.state else {
+                continue;
+            };
+            let _ = registration
+                ._control_sender
+                .send(SharedWorkerControlMsg::Exit);
+        }
+    }
 }
 
 impl SharedWorkerMethods<crate::DomTypeHolder> for SharedWorker {

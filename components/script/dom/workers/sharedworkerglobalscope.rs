@@ -78,7 +78,6 @@ pub(crate) enum SharedWorkerScriptMsg {
 }
 
 pub(crate) enum SharedWorkerControlMsg {
-    #[expect(dead_code)]
     Exit,
     SetNetworkOnlineState(bool),
 }
@@ -800,6 +799,8 @@ impl SharedWorkerGlobalScope {
                 self.handle_script_event(msg, cx);
             },
             MixedMessage::Control(SharedWorkerControlMsg::Exit) => {
+                // The scope's event loop runs until the closing flag is set.
+                self.upcast::<WorkerGlobalScope>().close();
                 return false;
             },
             MixedMessage::Control(SharedWorkerControlMsg::SetNetworkOnlineState(online)) => {
