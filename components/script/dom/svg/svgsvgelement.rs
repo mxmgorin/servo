@@ -15,7 +15,7 @@ use style::attr::AttrValue;
 use style::parser::ParserContext;
 use style::stylesheets::Origin;
 use style::values::specified::LengthPercentage;
-use style_traits::ParsingMode;
+use style_traits::{ParsingMode, ToCss};
 use uuid::Uuid;
 use xml5ever::serialize::TraversalScope;
 
@@ -95,6 +95,7 @@ impl SVGSVGElement {
         }
 
         self.process_use_elements(cx, &cloned_node);
+        self.inherit_current_color(cx, &cloned_node);
 
         let Ok(xml_source) = cloned_node.xml_serialize(TraversalScope::IncludeNode) else {
             *self.cached_serialized_data_url.borrow_mut() = Some(Err(()));
@@ -108,6 +109,22 @@ impl SVGSVGElement {
             Ok(url) => *self.cached_serialized_data_url.borrow_mut() = Some(Ok(url)),
             Err(error) => error!("Unable to parse serialized SVG data url: {error}"),
         };
+    }
+
+    /// Copies this element's computed `color` onto the serialized root, which is rasterized
+    /// without the page's styles. An explicit `color` attribute is kept.
+    fn inherit_current_color(&self, cx: &mut JSContext, root_node: &Node) {
+        let Some(style) = self.upcast::<Element>().style_without_reflow() else {
+            return;
+        };
+        let root = root_node
+            .downcast::<Element>()
+            .expect("root_node is a clone of this element");
+        if root.has_attribute(&local_name!("color")) {
+            return;
+        }
+        let color = style.get_inherited_text().color.into_srgb_legacy();
+        root.set_string_attribute(cx, &local_name!("color"), color.to_css_string().into());
     }
 
     fn process_use_elements(&self, cx: &mut JSContext, root_node: &Node) {
