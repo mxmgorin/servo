@@ -1643,6 +1643,7 @@ impl LayoutThread {
             paint_timing_handler,
             reflow_statistics,
             reflow_request.frame_focused,
+            (!self.is_iframe).then(|| self.device().color_scheme()),
         );
 
         stacking_context_tree.paint_info.paint_timing_info = reflow_request.paint_timing_info;
