@@ -32,6 +32,7 @@ use style::dom::OpaqueNode;
 use style::properties::ComputedValues;
 use style::properties::longhands::visibility::computed_value::T as Visibility;
 use style::properties::style_structs::Border;
+use style::queries::values::PrefersColorScheme;
 use style::values::computed::basic_shape::ClipPath as ComputedClipPath;
 use style::values::computed::{
     BorderImageSideWidth, BorderImageWidth, BorderStyle, LengthPercentage,
@@ -40,6 +41,7 @@ use style::values::computed::{
 use style::values::generics::NonNegative;
 use style::values::generics::color::ColorOrAuto;
 use style::values::generics::rect::Rect as StyleRect;
+use style::values::specified::color::ColorSchemeFlags;
 use style::values::specified::text::TextDecorationLine;
 use style_traits::{CSSPixel as StyloCSSPixel, DevicePixel as StyloDevicePixel};
 use webrender_api::units::{
@@ -147,6 +149,10 @@ pub(crate) struct DisplayListBuilder<'a> {
     /// The background color used for the shell.
     shell_background_color: AbsoluteColor,
 
+    /// The preferred color scheme a transparent canvas is painted for, or `None` where it
+    /// stays transparent, as in an iframe's document.
+    canvas_color_scheme: Option<PrefersColorScheme>,
+
     /// Whether or not the `WebView` this display list is being rendered for has system focus
     /// and is the focused frame in the frame tree.
     frame_focused: bool,
@@ -206,6 +212,7 @@ impl DisplayListBuilder<'_> {
         paint_timing_handler: &mut PaintTimingHandler,
         reflow_statistics: &mut ReflowStatistics,
         frame_focused: bool,
+        canvas_color_scheme: Option<PrefersColorScheme>,
     ) -> BuiltDisplayList {
         // Build the rest of the display list which inclues all of the WebRender primitives.
         let paint_info = &mut stacking_context_tree.paint_info;
@@ -250,6 +257,7 @@ impl DisplayListBuilder<'_> {
             largest_contentful_paint_enabled: pref!(largest_contentful_paint_enabled),
             container_timing_enabled: pref!(container_timing_enabled),
             shell_background_color,
+            canvas_color_scheme,
             frame_focused,
             glyph_buffer: Vec::new(),
         };
@@ -1056,12 +1064,6 @@ impl PaintTraversalHandler for DisplayListBuilder<'_> {
             }
         };
 
-        // This can happen if the root fragment does not have a `<body>` child (either because it is
-        // `display: none` or `display: contents`) or if the `<body>`'s background is transparent.
-        if source_style.background_is_transparent() {
-            return;
-        }
-
         // The painting area is theoretically the infinite 2D plane,
         // but we need a rectangle with finite coordinates.
         //
@@ -1073,6 +1075,17 @@ impl PaintTraversalHandler for DisplayListBuilder<'_> {
             .initial_containing_block
             .union(&self.fragment_tree.scrollable_overflow())
             .to_webrender();
+
+        // This can happen if the root fragment does not have a `<body>` child (either because it is
+        // `display: none` or `display: contents`) or if the `<body>`'s background is transparent.
+        if source_style.background_is_transparent() {
+            if let Some(preferred) = self.canvas_color_scheme {
+                let color = default_canvas_color(fragment.style(), preferred);
+                let common = self.common_properties(state, painting_area, fragment.style());
+                self.wr().push_rect(&common, painting_area, rgba(color));
+            }
+            return;
+        }
 
         let background_color =
             source_style.resolve_color(&source_style.get_background().background_color);
@@ -2499,6 +2512,34 @@ impl<'a> BuilderForBoxFragment<'a> {
                 clip_mode,
             );
         }
+    }
+}
+
+/// Each sRGB channel of Stylo's dark `Canvas` system color, a neutral gray.
+const DARK_CANVAS_CHANNEL: u8 = 30;
+
+/// The `Canvas` system color for the root element's used color scheme, resolved as Stylo's
+/// crate-private `Device::system_color` resolves it.
+fn default_canvas_color(
+    root_style: &ComputedValues,
+    preferred: PrefersColorScheme,
+) -> AbsoluteColor {
+    let schemes = root_style.get_inherited_ui().color_scheme.bits;
+    let supports_dark = schemes.contains(ColorSchemeFlags::DARK);
+    let dark = if supports_dark != schemes.contains(ColorSchemeFlags::LIGHT) {
+        supports_dark
+    } else {
+        preferred == PrefersColorScheme::Dark
+    };
+    if dark {
+        AbsoluteColor::srgb_legacy(
+            DARK_CANVAS_CHANNEL,
+            DARK_CANVAS_CHANNEL,
+            DARK_CANVAS_CHANNEL,
+            1.0,
+        )
+    } else {
+        AbsoluteColor::WHITE
     }
 }
 
