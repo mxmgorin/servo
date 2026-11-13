@@ -50,17 +50,8 @@ impl VertexArrayObject {
     }
 
     pub(crate) fn delete(&self, operation_fallibility: Operation) {
-        assert!(self.id.is_some());
-        if self.is_deleted.get() {
+        if !self.delete_name(operation_fallibility) {
             return;
-        }
-        self.is_deleted.set(true);
-
-        if let Some(context) = self.context.root() {
-            context.send_with_fallibility(
-                WebGLCommand::DeleteVertexArray(self.id.unwrap()),
-                operation_fallibility,
-            );
         }
 
         for attrib_data in &**self.vertex_attribs.borrow() {
@@ -71,6 +62,24 @@ impl VertexArrayObject {
         if let Some(buffer) = self.element_array_buffer.get() {
             buffer.decrement_attached_counter(operation_fallibility);
         }
+    }
+
+    /// Deletes the GL vertex array unless already deleted, leaving the bound buffers
+    /// alone; returns whether this call deleted it.
+    fn delete_name(&self, operation_fallibility: Operation) -> bool {
+        let id = self
+            .id
+            .expect("only a script-created vertex array is deleted");
+        if self.is_deleted.get() {
+            return false;
+        }
+        self.is_deleted.set(true);
+
+        if let Some(context) = self.context.root() {
+            context
+                .send_with_fallibility(WebGLCommand::DeleteVertexArray(id), operation_fallibility);
+        }
+        true
     }
 
     pub(crate) fn ever_bound(&self) -> bool {
@@ -262,8 +271,9 @@ impl VertexArrayObject {
 
 impl Drop for VertexArrayObject {
     fn drop(&mut self) {
+        // Runs during GC finalization, where the bound buffers may already be finalized.
         if self.id.is_some() {
-            self.delete(Operation::Fallible);
+            self.delete_name(Operation::Fallible);
         }
     }
 }
