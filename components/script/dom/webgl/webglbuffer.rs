@@ -105,7 +105,12 @@ impl DroppableWebGLBuffer {
 
 impl Drop for DroppableWebGLBuffer {
     fn drop(&mut self) {
-        self.mark_for_deletion(Operation::Fallible);
+        // Every attachment is traced, so whatever still counts as one is garbage too.
+        if !self.is_deleted() {
+            self.set_attached_counter(0);
+            self.set_marked_for_deletion(true);
+            self.delete(Operation::Fallible);
+        }
     }
 }
 
