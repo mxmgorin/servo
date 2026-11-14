@@ -5,7 +5,10 @@
 use euclid::default::Size2D;
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
-use pixels::{CorsStatus, flip_y_rgba8_image_inplace, load_from_memory, multiply_u8_color};
+use pixels::{
+    CorsStatus, Multiply, flip_y_rgba8_image_inplace, load_from_memory, multiply_u8_color,
+    rgba8_premultiply_inplace, transform_inplace, unmultiply_inplace,
+};
 
 const RED: [u8; 4] = [255, 0, 0, 255];
 const GREEN: [u8; 4] = [0, 255, 0, 255];
@@ -96,4 +99,23 @@ fn test_decoded_image_premultiplication() {
             255
         ]
     );
+}
+
+#[test]
+fn test_unmultiply_then_premultiply_restores_pixels() {
+    // Every valid premultiplied color under every non-zero alpha.
+    let premultiplied: Vec<u8> = (1..=u8::MAX)
+        .flat_map(|alpha| (0..=alpha).map(move |color| [color, color, color, alpha]))
+        .flatten()
+        .collect();
+
+    let mut pixels = premultiplied.clone();
+    unmultiply_inplace::<false>(&mut pixels);
+    rgba8_premultiply_inplace(&mut pixels);
+    assert_eq!(pixels, premultiplied, "unmultiply_inplace");
+
+    let mut pixels = premultiplied.clone();
+    transform_inplace(&mut pixels, Multiply::UnMultiply, false, false);
+    transform_inplace(&mut pixels, Multiply::PreMultiply, false, false);
+    assert_eq!(pixels, premultiplied, "transform_inplace");
 }
