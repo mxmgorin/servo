@@ -111,6 +111,43 @@ impl VelloCPUDrawTarget {
         }
     }
 
+    /// Queues a copy of `surface` from `source_origin` onto `dest`, ignoring clips and compositing.
+    fn copy_in_scene(
+        &mut self,
+        surface: Arc<vello_cpu::Pixmap>,
+        source_origin: Point2D<i32>,
+        dest: Rect<i32>,
+    ) {
+        let rect: kurbo::Rect = dest.cast::<f64>().into();
+        let offset = (dest.origin - source_origin).cast::<f64>();
+        self.ignore_clips(|self_| {
+            self_.ctx.set_transform(kurbo::Affine::IDENTITY);
+            // Source-over onto cleared pixels is a copy.
+            self_.ctx.push_layer(
+                Some(&rect.to_path(0.1)),
+                Some(peniko::Compose::Clear.into()),
+                None,
+                None,
+                None,
+            );
+            self_.ctx.pop_layer();
+            self_.ctx.set_paint(vello_cpu::Image {
+                image: vello_cpu::ImageSource::Pixmap(surface),
+                sampler: peniko::ImageSampler {
+                    x_extend: peniko::Extend::Pad,
+                    y_extend: peniko::Extend::Pad,
+                    quality: peniko::ImageQuality::Low,
+                    alpha: 1.0,
+                },
+            });
+            self_
+                .ctx
+                .set_paint_transform(kurbo::Affine::translate((offset.x, offset.y)));
+            self_.ctx.fill_rect(&rect);
+            self_.ctx.reset_paint_transform();
+        });
+    }
+
     fn pixmap(&mut self) -> &[u8] {
         if self.state == State::Drawing {
             self.ignore_clips(|self_| {
@@ -220,28 +257,29 @@ impl GenericDrawTarget for VelloCPUDrawTarget {
         source: Rect<i32>,
         destination: Point2D<i32>,
     ) {
-        self.ensure_drawing();
-        let destination: kurbo::Point = destination.cast::<f64>().into();
-        let rect = kurbo::Rect::from_origin_size(destination, source.size.cast());
-        self.ctx.set_transform(kurbo::Affine::IDENTITY);
-        self.ignore_clips(|self_| {
-            // Clipped blending does not work correctly:
-            // https://github.com/linebender/vello/issues/1119
-            // self_.push_layer(Some(rect.to_path(0.1)), Some(peniko::Compose::Copy.into()), None, None);
-
-            self_.ctx.set_paint(vello_cpu::Image {
-                image: vello_cpu::ImageSource::Pixmap(surface),
-                sampler: peniko::ImageSampler {
-                    x_extend: peniko::Extend::Pad,
-                    y_extend: peniko::Extend::Pad,
-                    quality: peniko::ImageQuality::Low,
-                    alpha: 1.0,
-                },
-            });
-            self_.ctx.fill_rect(&rect);
-
-            // self_.ctx.pop_layer();
-        });
+        let canvas = Rect::from_size(self.size().to_i32());
+        let Some(dest) = Rect::new(destination, source.size).intersection(&canvas) else {
+            return;
+        };
+        let source_origin = source.origin + (dest.origin - destination);
+        if self.state == State::Drawing {
+            if dest != canvas {
+                self.copy_in_scene(surface, source_origin, dest);
+                return;
+            }
+            // The copy replaces every pending pixel.
+            self.ignore_clips(|self_| self_.ctx.reset());
+            self.state = State::Rendered;
+        }
+        let width = usize::from(self.pixmap.width());
+        let source_width = usize::from(surface.width());
+        let row_len = dest.size.width as usize;
+        let pixels = self.pixmap.data_mut();
+        for row in 0..dest.size.height as usize {
+            let from = (source_origin.y as usize + row) * source_width + source_origin.x as usize;
+            let to = (dest.origin.y as usize + row) * width + dest.origin.x as usize;
+            pixels[to..to + row_len].copy_from_slice(&surface.data()[from..from + row_len]);
+        }
     }
 
     fn create_similar_draw_target(&self, size: &Size2D<i32>) -> Self {
