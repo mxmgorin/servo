@@ -586,9 +586,10 @@ pub fn unmultiply_inplace<const SWAP_RB: bool>(pixels: &mut [u8]) {
         let mut r = rgba[0] as u32;
 
         if a > 0 {
-            r = r * 255 / a;
-            g = g * 255 / a;
-            b = b * 255 / a;
+            // Rounded, so premultiplying the result restores the input exactly.
+            r = (r * 255 + a / 2) / a;
+            g = (g * 255 + a / 2) / a;
+            b = (b * 255 + a / 2) / a;
 
             if SWAP_RB {
                 rgba[2] = r as u8;
@@ -655,9 +656,10 @@ pub fn generic_transform_inplace<
                 let a = rgba[3] as u32;
 
                 if a > 0 {
-                    rgba[0] = (rgba[0] as u32 * 255 / a) as u8;
-                    rgba[1] = (rgba[1] as u32 * 255 / a) as u8;
-                    rgba[2] = (rgba[2] as u32 * 255 / a) as u8;
+                    // Rounded, so premultiplying the result restores the input exactly.
+                    rgba[0] = ((rgba[0] as u32 * 255 + a / 2) / a) as u8;
+                    rgba[1] = ((rgba[1] as u32 * 255 + a / 2) / a) as u8;
+                    rgba[2] = ((rgba[2] as u32 * 255 + a / 2) / a) as u8;
                 }
             },
             _ => {},
