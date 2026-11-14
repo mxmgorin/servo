@@ -196,13 +196,36 @@ pub fn rgba8_byte_swap_and_premultiply_inplace(pixels: &mut [u8]) {
 pub fn rgba8_premultiply_inplace(pixels: &mut [u8]) -> bool {
     assert!(pixels.len().is_multiple_of(4));
     let mut is_opaque = true;
-    for rgba in pixels.chunks_mut(4) {
-        rgba[0] = multiply_u8_color(rgba[0], rgba[3]);
-        rgba[1] = multiply_u8_color(rgba[1], rgba[3]);
-        rgba[2] = multiply_u8_color(rgba[2], rgba[3]);
-        is_opaque = is_opaque && rgba[3] == 255;
+    for rgba in pixels.as_chunks_mut::<4>().0 {
+        *rgba = premultiply_rgba8(*rgba);
+        // Not `&&`: a branch in the loop keeps it from being vectorized.
+        is_opaque &= rgba[3] == u8::MAX;
     }
     is_opaque
+}
+
+// Channel masks of an RGBA8 pixel read as a little-endian `u32`.
+const RED_BLUE: u32 = 0x00ff_00ff;
+const GREEN: u32 = 0x0000_ff00;
+const ALPHA: u32 = 0xff00_0000;
+/// The rounding term of [`multiply_u8_color`] in each 16-bit lane.
+const LANE_ROUNDING: u32 = 0x0080_0080;
+
+/// [`multiply_u8_color`] on both 16-bit lanes of `lanes` at once, each holding one channel.
+#[inline(always)]
+fn multiply_lanes(lanes: u32, alpha: u32) -> u32 {
+    let c = lanes * alpha + LANE_ROUNDING;
+    ((c + ((c >> 8) & RED_BLUE)) >> 8) & RED_BLUE
+}
+
+/// Premultiplies one RGBA8 pixel with the rounding of [`multiply_u8_color`].
+#[inline(always)]
+fn premultiply_rgba8(rgba: [u8; 4]) -> [u8; 4] {
+    let pixel = u32::from_le_bytes(rgba);
+    let alpha = pixel >> 24;
+    let red_blue = multiply_lanes(pixel & RED_BLUE, alpha);
+    let green = multiply_lanes((pixel & GREEN) >> 8, alpha);
+    (red_blue | green << 8 | pixel & ALPHA).to_le_bytes()
 }
 
 /// Returns a*b/255, rounding any fractional bits to nearest integer
@@ -642,15 +665,9 @@ pub fn generic_transform_inplace<
 >(
     pixels: &mut [u8],
 ) {
-    for rgba in pixels.chunks_mut(4) {
+    for rgba in pixels.as_chunks_mut::<4>().0 {
         match MULTIPLY {
-            1 => {
-                let a = rgba[3];
-
-                rgba[0] = multiply_u8_color(rgba[0], a);
-                rgba[1] = multiply_u8_color(rgba[1], a);
-                rgba[2] = multiply_u8_color(rgba[2], a);
-            },
+            1 => *rgba = premultiply_rgba8(*rgba),
             2 => {
                 let a = rgba[3] as u32;
 
