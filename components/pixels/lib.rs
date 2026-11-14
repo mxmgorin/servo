@@ -214,6 +214,30 @@ pub fn multiply_u8_color(a: u8, b: u8) -> u8 {
     ((c + (c >> 8)) >> 8) as u8
 }
 
+/// Fixed-point shift of [`RECIPROCALS`].
+const RECIPROCAL_SHIFT: u32 = 32;
+
+/// `n * RECIPROCALS[a] >> RECIPROCAL_SHIFT` is `n / a` for every dividend
+/// [`unmultiply_u8_color`] forms; alpha 0 divides by full alpha, keeping the color.
+static RECIPROCALS: [u64; 256] = {
+    let mut table = [0; 256];
+    let mut alpha = 1;
+    while alpha < table.len() {
+        table[alpha] = (1u64 << RECIPROCAL_SHIFT).div_ceil(alpha as u64);
+        alpha += 1;
+    }
+    table[0] = table[u8::MAX as usize];
+    table
+};
+
+/// Returns c*255/a rounded to nearest, which premultiplies back to a premultiplied `c`
+/// exactly; alpha 0 returns `c`.
+#[inline(always)]
+fn unmultiply_u8_color(c: u8, a: u8) -> u8 {
+    let dividend = c as u64 * u8::MAX as u64 + (a / 2) as u64;
+    ((dividend * RECIPROCALS[a as usize]) >> RECIPROCAL_SHIFT) as u8
+}
+
 pub fn clip(
     mut origin: Point2D<i32>,
     mut size: Size2D<u32>,
@@ -574,32 +598,19 @@ pub fn detect_image_format(buffer: &[u8]) -> Result<ImageFormat, &str> {
     }
 }
 
-#[expect(
-    clippy::manual_checked_ops,
-    reason = "This code becomes less readable by applying the lint"
-)]
 pub fn unmultiply_inplace<const SWAP_RB: bool>(pixels: &mut [u8]) {
-    for rgba in pixels.chunks_mut(4) {
-        let a = rgba[3] as u32;
-        let mut b = rgba[2] as u32;
-        let mut g = rgba[1] as u32;
-        let mut r = rgba[0] as u32;
-
-        if a > 0 {
-            // Rounded, so premultiplying the result restores the input exactly.
-            r = (r * 255 + a / 2) / a;
-            g = (g * 255 + a / 2) / a;
-            b = (b * 255 + a / 2) / a;
-
-            if SWAP_RB {
-                rgba[2] = r as u8;
-                rgba[1] = g as u8;
-                rgba[0] = b as u8;
-            } else {
-                rgba[2] = b as u8;
-                rgba[1] = g as u8;
-                rgba[0] = r as u8;
+    for rgba in pixels.as_chunks_mut::<4>().0 {
+        let a = rgba[3];
+        if a == 0 {
+            continue;
+        }
+        if a != u8::MAX {
+            for color in &mut rgba[..3] {
+                *color = unmultiply_u8_color(*color, a);
             }
+        }
+        if SWAP_RB {
+            rgba.swap(0, 2);
         }
     }
 }
@@ -632,10 +643,6 @@ pub fn transform_inplace(pixels: &mut [u8], multiply: Multiply, swap_rb: bool, c
     }
 }
 
-#[expect(
-    clippy::manual_checked_ops,
-    reason = "This code becomes less readable by applying the lint"
-)]
 pub fn generic_transform_inplace<
     const MULTIPLY: u8, // 1 premultiply, 2 unmultiply
     const SWAP_RB: bool,
@@ -643,7 +650,8 @@ pub fn generic_transform_inplace<
 >(
     pixels: &mut [u8],
 ) {
-    for rgba in pixels.chunks_mut(4) {
+    assert!(pixels.len().is_multiple_of(4));
+    for rgba in pixels.as_chunks_mut::<4>().0 {
         match MULTIPLY {
             1 => {
                 let a = rgba[3];
@@ -653,13 +661,12 @@ pub fn generic_transform_inplace<
                 rgba[2] = multiply_u8_color(rgba[2], a);
             },
             2 => {
-                let a = rgba[3] as u32;
-
-                if a > 0 {
-                    // Rounded, so premultiplying the result restores the input exactly.
-                    rgba[0] = ((rgba[0] as u32 * 255 + a / 2) / a) as u8;
-                    rgba[1] = ((rgba[1] as u32 * 255 + a / 2) / a) as u8;
-                    rgba[2] = ((rgba[2] as u32 * 255 + a / 2) / a) as u8;
+                let a = rgba[3];
+                // Alpha 0 and full alpha leave the color as is.
+                if a != 0 && a != u8::MAX {
+                    for color in &mut rgba[..3] {
+                        *color = unmultiply_u8_color(*color, a);
+                    }
                 }
             },
             _ => {},
