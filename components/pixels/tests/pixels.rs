@@ -64,43 +64,6 @@ fn test_flip_y_rgba8_image_inplace() {
     );
 }
 
-fn encode_png(pixels: &[u8], width: u32, color_type: ExtendedColorType) -> Vec<u8> {
-    let mut png = Vec::new();
-    PngEncoder::new(&mut png)
-        .write_image(pixels, width, 1, color_type)
-        .expect("a single-row image of matching length encodes");
-    png
-}
-
-#[test]
-fn test_decoded_image_premultiplication() {
-    let rgb = encode_png(&[10, 20, 30, 40, 50, 60], 2, ExtendedColorType::Rgb8);
-    let rgb = load_from_memory(&rgb, CorsStatus::Safe).expect("encoded PNG decodes");
-    assert!(rgb.is_opaque, "an image without alpha is opaque");
-    assert_eq!(*rgb.bytes, [10, 20, 30, 255, 40, 50, 60, 255]);
-
-    let [r, g, b, a] = [200, 100, 50, 128];
-    let rgba = encode_png(&[r, g, b, a, 1, 2, 3, 255], 2, ExtendedColorType::Rgba8);
-    let rgba = load_from_memory(&rgba, CorsStatus::Safe).expect("encoded PNG decodes");
-    assert!(
-        !rgba.is_opaque,
-        "an image with a translucent pixel is not opaque"
-    );
-    assert_eq!(
-        *rgba.bytes,
-        [
-            multiply_u8_color(r, a),
-            multiply_u8_color(g, a),
-            multiply_u8_color(b, a),
-            a,
-            1,
-            2,
-            3,
-            255
-        ]
-    );
-}
-
 #[test]
 fn test_unmultiply_then_premultiply_restores_pixels() {
     // Every valid premultiplied color under every non-zero alpha.
@@ -147,4 +110,73 @@ fn test_unmultiply_matches_rounded_division() {
     let mut unmultiplied = pixels.clone();
     transform_inplace(&mut unmultiplied, Multiply::UnMultiply, false, false);
     assert_eq!(unmultiplied, expected, "transform_inplace");
+}
+
+fn encode_png(pixels: &[u8], width: u32, color_type: ExtendedColorType) -> Vec<u8> {
+    let mut png = Vec::new();
+    PngEncoder::new(&mut png)
+        .write_image(pixels, width, 1, color_type)
+        .expect("a single-row image of matching length encodes");
+    png
+}
+
+#[test]
+fn test_decoded_image_premultiplication() {
+    let rgb = encode_png(&[10, 20, 30, 40, 50, 60], 2, ExtendedColorType::Rgb8);
+    let rgb = load_from_memory(&rgb, CorsStatus::Safe).expect("encoded PNG decodes");
+    assert!(rgb.is_opaque, "an image without alpha is opaque");
+    assert_eq!(*rgb.bytes, [10, 20, 30, 255, 40, 50, 60, 255]);
+
+    let [r, g, b, a] = [200, 100, 50, 128];
+    let rgba = encode_png(&[r, g, b, a, 1, 2, 3, 255], 2, ExtendedColorType::Rgba8);
+    let rgba = load_from_memory(&rgba, CorsStatus::Safe).expect("encoded PNG decodes");
+    assert!(
+        !rgba.is_opaque,
+        "an image with a translucent pixel is not opaque"
+    );
+    assert_eq!(
+        *rgba.bytes,
+        [
+            multiply_u8_color(r, a),
+            multiply_u8_color(g, a),
+            multiply_u8_color(b, a),
+            a,
+            1,
+            2,
+            3,
+            255
+        ]
+    );
+}
+
+#[test]
+fn test_rgba8_premultiply_inplace() {
+    // Every color under every alpha, with distinct channels.
+    let pixels: Vec<u8> = (0..=u8::MAX)
+        .flat_map(|alpha| (0..=u8::MAX).map(move |color| [color, !color, color / 3, alpha]))
+        .flatten()
+        .collect();
+    let expected: Vec<u8> = pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|&[r, g, b, a]| {
+            [
+                multiply_u8_color(r, a),
+                multiply_u8_color(g, a),
+                multiply_u8_color(b, a),
+                a,
+            ]
+        })
+        .collect();
+    let mut premultiplied = pixels;
+    assert!(!rgba8_premultiply_inplace(&mut premultiplied));
+    assert_eq!(premultiplied, expected);
+
+    let opaque: Vec<u8> = (0..=u8::MAX)
+        .flat_map(|color| [color, !color, color / 3, u8::MAX])
+        .collect();
+    let mut premultiplied = opaque.clone();
+    assert!(rgba8_premultiply_inplace(&mut premultiplied));
+    assert_eq!(premultiplied, opaque);
 }
