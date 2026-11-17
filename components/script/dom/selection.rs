@@ -1731,8 +1731,14 @@ impl<'no_gc> FlatTreeSelection<'no_gc> {
     }
 
     fn traversal(&self) -> VisibleSelectionTraversal<'no_gc> {
-        let start_position = position_in_flat_tree_for_selection(self.no_gc, &self.start);
+        let mut start_position = position_in_flat_tree_for_selection(self.no_gc, &self.start);
         let end_position = position_in_flat_tree_for_selection(self.no_gc, &self.end);
+        // A collapsed selection covers no content: skip the descendants of the node it sits in.
+        if self.is_collapsed() &&
+            let FlatTreeNodePosition::Inside(node) = start_position
+        {
+            start_position = FlatTreeNodePosition::After(node);
+        }
         VisibleSelectionTraversal {
             following: start_position
                 .node()
