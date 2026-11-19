@@ -4627,14 +4627,13 @@ impl ScriptThread {
     pub(crate) fn perform_a_microtask_checkpoint(&self, cx: &mut JSContext) {
         // Only perform the checkpoint if we're not shutting down.
         if self.can_continue_running_inner() {
-            let globals = self
-                .documents
-                .borrow()
-                .iter()
-                .map(|(_id, document)| DomRoot::from_ref(document.window().upcast()))
-                .collect();
-
-            job_queue_microtask_checkpoint(cx, globals)
+            job_queue_microtask_checkpoint(cx, || {
+                self.documents
+                    .borrow()
+                    .iter()
+                    .map(|(_id, document)| DomRoot::from_ref(document.window().upcast()))
+                    .collect()
+            })
         }
     }
 

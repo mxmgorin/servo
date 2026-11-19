@@ -130,7 +130,7 @@ unsafe extern "C" fn run_jobs(cx: *mut RawJSContext) {
     wrap_panic(&mut || {
         // TODO: run Promise- and User-variant Microtasks, and do #notify-about-rejected-promises.
         // Those will require real `globalscopes` values.
-        job_queue_microtask_checkpoint(&mut cx, vec![]);
+        job_queue_microtask_checkpoint(&mut cx, Vec::new);
     });
 }
 
@@ -203,10 +203,11 @@ pub(crate) fn enqueue(cx: &JSContext, task: Box<dyn MicrotaskRunnable>) {
 
 /// <https://html.spec.whatwg.org/multipage/#perform-a-microtask-checkpoint>
 /// Perform a microtask checkpoint, executing all queued microtasks until the queue is empty.
+/// `globalscopes` yields this event loop's globals; it is called only after the queue drains.
 #[expect(unsafe_code)]
 pub(crate) fn job_queue_microtask_checkpoint(
     cx: &mut JSContext,
-    globalscopes: Vec<DomRoot<GlobalScope>>,
+    globalscopes: impl FnOnce() -> Vec<DomRoot<GlobalScope>>,
 ) {
     let job_queue: *mut RustJobQueue = unsafe { GetJobQueue(cx) } as _;
     // Step 1. If the event loop's performing a microtask checkpoint is true, then return.
@@ -297,6 +298,7 @@ pub(crate) fn job_queue_microtask_checkpoint(
     // Step 4. For each environment settings object settingsObject whose responsible
     // event loop is this event loop, notify about rejected promises given
     // settingsObject's global object.
+    let globalscopes = globalscopes();
     for global in &globalscopes {
         notify_about_rejected_promises(cx, global);
     }

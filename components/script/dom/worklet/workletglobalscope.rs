@@ -216,7 +216,7 @@ impl WorkletGlobalScope {
 
     pub(crate) fn perform_a_microtask_checkpoint(&self, cx: &mut JSContext) {
         if !self.closing.load(Ordering::SeqCst) {
-            job_queue_microtask_checkpoint(cx, vec![DomRoot::from_ref(&self.globalscope)]);
+            job_queue_microtask_checkpoint(cx, || vec![DomRoot::from_ref(&self.globalscope)]);
         }
     }
 }
