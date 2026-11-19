@@ -2676,7 +2676,9 @@ impl UnshapedTextRun<'_> {
         }
 
         match (&self.font, other_font) {
-            (Some(font_a), Some(font_b)) => *font_a.identifier() == *font_b.identifier(),
+            (Some(font_a), Some(font_b)) => {
+                font_a == font_b || *font_a.identifier() == *font_b.identifier()
+            },
             (None, None) => true,
             _ => false,
         }
