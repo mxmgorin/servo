@@ -4,6 +4,7 @@
 
 #![cfg_attr(crown, allow(crown::jscontext_first_arg))]
 
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::fmt;
 use std::str::FromStr;
@@ -1644,7 +1645,8 @@ impl CanvasState {
         // Max width is not provided for `measureText()`.
 
         // > Step 2: Replace all ASCII whitespace in text with U+0020 SPACE characters.
-        let text = replace_ascii_whitespace(&text.str());
+        let text = text.str();
+        let text = replace_ascii_whitespace(&text);
 
         // > Step 3: Let font be the current font of target, as given by that object's font
         // > attribute.
@@ -2904,13 +2906,17 @@ impl Convert<FillRule> for CanvasFillRule {
     }
 }
 
-fn replace_ascii_whitespace(text: &str) -> String {
+fn replace_ascii_whitespace(text: &str) -> Cow<'_, str> {
+    if !text.contains(['\t', '\n', '\r', '\x0C']) {
+        return Cow::Borrowed(text);
+    }
     text.chars()
         .map(|c| match c {
             ' ' | '\t' | '\n' | '\r' | '\x0C' => '\x20',
             _ => c,
         })
-        .collect()
+        .collect::<String>()
+        .into()
 }
 
 /// Same as stylo's private LARGER_FONT_SIZE_RATIO (style/values/specified/font.rs),
