@@ -188,7 +188,7 @@ struct CachedShapeData {
     glyph_advances: FxHashMap<GlyphId, FractionalPixel>,
     glyph_bounds: FxHashMap<GlyphId, Rect<f32>>,
     glyph_indices: FxHashMap<char, Option<GlyphId>>,
-    shaped_text: HashMap<ShapeCacheEntry, Arc<ShapedText>>,
+    shaped_text: FxHashMap<ShapeCacheEntry, Arc<ShapedText>>,
 }
 
 impl malloc_size_of::MallocSizeOf for CachedShapeData {
