@@ -299,6 +299,72 @@ pub(crate) fn decode_static_image(
     })
 }
 
+/// Returns a reader for `buffer` if it is a static, non-interlaced PNG without EXIF data whose
+/// pixels expand to 8-bit RGBA within the default allocation limit; `None` otherwise.
+pub(crate) fn rgba8_png_reader(buffer: &[u8]) -> Option<::png::Reader<Cursor<&[u8]>>> {
+    let max_alloc = Limits::default().max_alloc.unwrap_or(u64::MAX);
+    let mut decoder = ::png::Decoder::new_with_limits(
+        Cursor::new(buffer),
+        ::png::Limits {
+            bytes: usize::try_from(max_alloc).unwrap_or(usize::MAX),
+        },
+    );
+    decoder.set_transformations(::png::Transformations::EXPAND);
+    let reader = decoder.read_info().ok()?;
+    let info = reader.info();
+    let (width, height) = info.size();
+    let fits = u64::from(width) * u64::from(height) * 4 <= max_alloc;
+    let rgba8 = reader.output_color_type() == (::png::ColorType::Rgba, ::png::BitDepth::Eight);
+    (rgba8 &&
+        fits &&
+        !info.interlaced &&
+        info.animation_control.is_none() &&
+        info.exif_metadata.is_none())
+    .then_some(reader)
+}
+
+/// Decodes `reader`'s image to premultiplied RGBA8, each row while it is still in cache;
+/// returns `None` if decoding fails. `reader` must come from [`rgba8_png_reader`].
+pub(crate) fn decode_rgba8_png(
+    cors_status: CorsStatus,
+    mut reader: ::png::Reader<Cursor<&[u8]>>,
+) -> Option<RasterImage> {
+    let (width, height) = reader.info().size();
+    let mut bytes = vec![0; reader.output_buffer_size()?];
+    let stride = reader.output_line_size(width)?;
+    let mut is_opaque = true;
+    for row in bytes.chunks_exact_mut(stride) {
+        if !matches!(reader.read_row(row), Ok(Some(_))) {
+            debug!("Image decoding error");
+            return None;
+        }
+        is_opaque &= rgba8_premultiply_inplace(row);
+    }
+    // Past the last row this reads the rest of the image data, so a corrupt tail still fails.
+    if reader.read_row(&mut []).is_err() {
+        debug!("Image decoding error");
+        return None;
+    }
+
+    let frame = ImageFrame {
+        delay: None,
+        byte_range: 0..bytes.len(),
+        width,
+        height,
+    };
+    Some(RasterImage {
+        metadata: ImageMetadata { width, height },
+        format: PixelFormat::RGBA8,
+        frames: vec![frame],
+        bytes: Arc::new(bytes),
+        id: None,
+        cors_status,
+        load_time: None,
+        is_opaque,
+        loop_count: None,
+    })
+}
+
 pub(crate) fn decode_animated_image<'a, T>(
     cors_status: CorsStatus,
     animated_image_decoder: T,

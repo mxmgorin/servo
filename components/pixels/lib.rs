@@ -585,6 +585,12 @@ pub fn load_from_memory(buffer: &[u8], cors_status: CorsStatus) -> Option<Raster
             None
         },
         Ok(format) => {
+            if format == ImageFormat::Png &&
+                let Some(reader) = decoding::rgba8_png_reader(buffer)
+            {
+                return decoding::decode_rgba8_png(cors_status, reader);
+            }
+
             let Ok(image_decoder) = decoding::DefaultImageDecoder::make_decoder(format, buffer)
             else {
                 return None;
