@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use std::collections::HashMap;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::sync::{Arc, OnceLock};
 use std::{iter, str};
@@ -471,7 +471,7 @@ impl ShapingOptions {
 }
 
 /// An entry in the shape cache.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 struct ShapeCacheEntry {
     text: String,
     letter_spacing: Au,
@@ -483,24 +483,103 @@ struct ShapeCacheEntry {
     flags: ShapingFlags,
 }
 
+/// A shape cache key that borrows its text and features, so a lookup allocates nothing.
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+struct ShapeCacheKey<'a> {
+    text: &'a str,
+    letter_spacing: Au,
+    word_spacing: Au,
+    script: Script,
+    language: &'a Atom,
+    language_override: Option<Tag>,
+    font_features: &'a [(Tag, u32)],
+    flags: ShapingFlags,
+}
+
+/// Views of a shape cache entry as a [`ShapeCacheKey`]. Entries hash and compare through it,
+/// so the map can be queried with a borrowed key.
+trait AsShapeCacheKey {
+    fn key(&self) -> ShapeCacheKey<'_>;
+}
+
+impl AsShapeCacheKey for ShapeCacheEntry {
+    fn key(&self) -> ShapeCacheKey<'_> {
+        ShapeCacheKey {
+            text: &self.text,
+            letter_spacing: self.letter_spacing,
+            word_spacing: self.word_spacing,
+            script: self.script,
+            language: &self.language,
+            language_override: self.language_override,
+            font_features: &self.font_features,
+            flags: self.flags,
+        }
+    }
+}
+
+impl AsShapeCacheKey for ShapeCacheKey<'_> {
+    fn key(&self) -> ShapeCacheKey<'_> {
+        *self
+    }
+}
+
+impl<'a> std::borrow::Borrow<dyn AsShapeCacheKey + 'a> for ShapeCacheEntry {
+    fn borrow(&self) -> &(dyn AsShapeCacheKey + 'a) {
+        self
+    }
+}
+
+impl Hash for dyn AsShapeCacheKey + '_ {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key().hash(state)
+    }
+}
+
+impl PartialEq for dyn AsShapeCacheKey + '_ {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+
+impl Eq for dyn AsShapeCacheKey + '_ {}
+
+impl Hash for ShapeCacheEntry {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key().hash(state)
+    }
+}
+
+impl PartialEq for ShapeCacheEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+
+impl Eq for ShapeCacheEntry {}
+
 impl Font {
     #[servo_tracing::instrument(name = "Font::shape_text", skip_all)]
     pub fn shape_text(&self, text: &str, options: &ShapingOptions) -> Arc<ShapedText> {
-        let font_features =
+        let font_features: SmallVec<[(Tag, u32); 8]> =
             compute_used_font_features(options, self.template.borrow().font_face_rule.as_deref())
                 .collect();
-        let lookup_key = ShapeCacheEntry {
-            text: text.to_owned(),
+        let lookup_key = ShapeCacheKey {
+            text,
             letter_spacing: options.letter_spacing,
             word_spacing: options.word_spacing,
             script: options.script,
-            language: options.language.clone(),
+            language: &options.language,
             language_override: options.language_override,
             flags: options.flags,
-            font_features,
+            font_features: &font_features,
         };
 
-        if let Some(shaped_text) = self.cached_shape_data.read().shaped_text.get(&lookup_key) {
+        if let Some(shaped_text) = self
+            .cached_shape_data
+            .read()
+            .shaped_text
+            .get(&lookup_key as &dyn AsShapeCacheKey)
+        {
             return shaped_text.clone();
         }
 
@@ -508,11 +587,21 @@ impl Font {
             self,
             text,
             options,
-            &lookup_key.font_features,
+            &font_features,
         ));
 
+        let entry = ShapeCacheEntry {
+            text: text.to_owned(),
+            letter_spacing: options.letter_spacing,
+            word_spacing: options.word_spacing,
+            script: options.script,
+            language: options.language.clone(),
+            language_override: options.language_override,
+            flags: options.flags,
+            font_features: font_features.as_slice().into(),
+        };
         let mut cache = self.cached_shape_data.write();
-        cache.shaped_text.insert(lookup_key, shaped_text.clone());
+        cache.shaped_text.insert(entry, shaped_text.clone());
 
         shaped_text
     }
