@@ -10,7 +10,7 @@ use fonts_traits::tag::{
     NALT, ONUM, ORDN, ORNM, PNUM, PWID, RUBY, SALT, SMPL, SUBS, SUPS, SWSH, TNUM, TRAD, ZERO,
 };
 use read_fonts::types::Tag;
-use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use style::computed_values::font_variant_position::T as FontVariantPosition;
 use style::values::computed::{FontVariantEastAsian, FontVariantLigatures, FontVariantNumeric};
 
@@ -143,10 +143,12 @@ pub(crate) fn compute_used_font_features(
     options: &ShapingOptions,
     font_face_rule: Option<&FontFaceRuleInfo>,
 ) -> impl Iterator<Item = (Tag, u32)> {
-    let mut features = FxHashMap::default();
+    // A tag set again keeps its first position and takes the new value.
+    let mut features: SmallVec<[(Tag, u32); 8]> = SmallVec::new();
 
-    let mut add_feature = |tag, value| {
-        features.entry(tag).insert_entry(value);
+    let mut add_feature = |tag, value| match features.iter_mut().find(|(set, _)| *set == tag) {
+        Some(feature) => feature.1 = value,
+        None => features.push((tag, value)),
     };
 
     // Step 1. Font features enabled by default are applied, including features required
