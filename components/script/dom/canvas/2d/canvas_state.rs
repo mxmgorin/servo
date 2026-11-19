@@ -16,8 +16,8 @@ use cssparser::color::clamp_unit_f32;
 use euclid::default::{Point2D, Rect, Size2D, Transform2D};
 use euclid::{Vector2D, vec2};
 use fonts::{
-    FontBaseline, FontContext, FontGroup, FontIdentifier, FontMetrics, FontRef, ShapingFlags,
-    ShapingOptions, script_for_char,
+    FontBaseline, FontContext, FontGroup, FontIdentifier, FontMetrics, FontRef, ShapedText,
+    ShapingFlags, ShapingOptions, script_for_char,
 };
 use icu_locale_core::LanguageIdentifier;
 use js::context::{JSContext, NoGC};
@@ -1671,18 +1671,13 @@ impl CanvasState {
         let runs = self.build_unshaped_text_runs(font_context, &text, &font_group);
 
         let mut total_advance = 0.0;
-        let shaped_runs: Vec<_> = runs
-            .into_iter()
-            .filter_map(|unshaped_text_run| {
-                let text_run = unshaped_text_run.into_shaped_text_run(total_advance)?;
-                total_advance += text_run.advance;
-                Some(text_run)
-            })
-            .collect();
-
-        let bounding_box = shaped_runs
+        let bounding_box = runs
             .iter()
-            .map(|text_run| text_run.bounds)
+            .filter_map(|unshaped_text_run| {
+                let (advance, bounds) = unshaped_text_run.measure(total_advance)?;
+                total_advance += advance;
+                Some(bounds)
+            })
             .reduce(|a, b| a.union(&b))
             .unwrap_or_default();
 
@@ -2686,15 +2681,12 @@ impl UnshapedTextRun<'_> {
         }
     }
 
-    fn into_shaped_text_run(self, previous_advance: f32) -> Option<TextRun> {
-        debug_assert!(!self.string.is_empty() && self.font.is_some());
-        let font = self.font?;
-
+    fn shape(&self, font: &FontRef) -> Arc<ShapedText> {
         let options = ShapingOptions {
             letter_spacing: Au::zero(),
             word_spacing: Au::zero(),
             script: self.script,
-            language: self.language,
+            language: self.language.clone(),
             language_override: None,
             flags: ShapingFlags::empty(),
             ligatures: FontVariantLigatures::NORMAL,
@@ -2704,11 +2696,31 @@ impl UnshapedTextRun<'_> {
             position: FontVariantPosition::Normal,
             alternates: Default::default(),
         };
+        font.shape_text(self.string, &options)
+    }
 
-        let glyphs = font.shape_text(self.string, &options);
+    /// Returns the advance of this run and the typographic bounds of its glyphs, placed after
+    /// `previous_advance`.
+    fn measure(&self, previous_advance: f32) -> Option<(f32, Rect<f64>)> {
+        debug_assert!(!self.string.is_empty() && self.font.is_some());
+        let font = self.font.as_ref()?;
+        let glyphs = self.shape(font);
+        let mut advance = 0.0;
+        for glyph in glyphs.glyphs() {
+            advance += glyph.advance().to_f32_px();
+        }
+        Some((
+            advance,
+            typographic_bounds_after(font, &glyphs, previous_advance),
+        ))
+    }
+
+    fn into_shaped_text_run(self, previous_advance: f32) -> Option<TextRun> {
+        debug_assert!(!self.string.is_empty() && self.font.is_some());
+        let font = self.font.as_ref()?;
+        let glyphs = self.shape(font);
 
         let mut advance = 0.0;
-        let mut bounds = None;
         let glyphs_and_positions = glyphs
             .glyphs()
             .map(|glyph| {
@@ -2717,14 +2729,7 @@ impl UnshapedTextRun<'_> {
                     id: glyph.id(),
                     point: Point2D::new(previous_advance + advance, glyph_offset.y.to_f32_px()),
                 };
-
-                let glyph_bounds = font
-                    .typographic_bounds(glyph.id())
-                    .translate(Vector2D::new(advance + previous_advance, 0.0));
-                bounds = Some(bounds.get_or_insert(glyph_bounds).union(&glyph_bounds));
-
                 advance += glyph.advance().to_f32_px();
-
                 glyph_and_position
             })
             .collect();
@@ -2747,9 +2752,21 @@ impl UnshapedTextRun<'_> {
             pt_size: font.descriptor.pt_size.to_f32_px(),
             glyphs_and_positions,
             advance,
-            bounds: bounds.unwrap_or_default().cast(),
+            bounds: typographic_bounds_after(font, &glyphs, previous_advance),
         })
     }
+}
+
+/// Returns the typographic bounds of `glyphs`, shaped by `font`, placed after `previous_advance`.
+fn typographic_bounds_after(
+    font: &FontRef,
+    glyphs: &ShapedText,
+    previous_advance: f32,
+) -> Rect<f64> {
+    font.text_typographic_bounds(glyphs)
+        .map(|bounds| bounds.translate(Vector2D::new(previous_advance, 0.0)))
+        .unwrap_or_default()
+        .cast()
 }
 
 /// <https://drafts.csswg.org/css-color/#parse-a-css-color-value>
