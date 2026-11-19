@@ -11,7 +11,10 @@ use app_units::Au;
 use atomic_refcell::AtomicRefCell;
 use font_types::Tag;
 use fonts::font_feature_values::ResolvedFontVariantAlternates;
-use fonts::{FontContext, FontRef, ShapedText, ShapedTextSlice, ShapingFlags, ShapingOptions};
+use fonts::{
+    FontContext, FontRef, ShapedText, ShapedTextSlice, ShapingFlags, ShapingOptions,
+    script_for_char,
+};
 use icu_locale_core::LanguageIdentifier;
 use icu_properties::props::{EnumeratedProperty, LineBreak};
 use log::warn;
@@ -624,7 +627,7 @@ impl TextRun {
                         next_character,
                         language_for_fallback,
                     ),
-                    Script::from(character),
+                    script_for_char(character),
                     bidi_levels.level(current_byte_index.into()),
                 )
             };

@@ -16,7 +16,7 @@ use euclid::default::{Point2D, Rect, Size2D, Transform2D};
 use euclid::{Vector2D, vec2};
 use fonts::{
     FontBaseline, FontContext, FontGroup, FontIdentifier, FontMetrics, FontRef, ShapingFlags,
-    ShapingOptions,
+    ShapingOptions, script_for_char,
 };
 use icu_locale_core::LanguageIdentifier;
 use js::context::{JSContext, NoGC};
@@ -2565,7 +2565,7 @@ impl CanvasState {
 
         for (index, character) in text.char_indices() {
             let next_char = text[index + character.len_utf8()..].chars().next();
-            let script = Script::from(character);
+            let script = script_for_char(character);
             let font = font_group.find_by_codepoint(
                 font_context,
                 character,

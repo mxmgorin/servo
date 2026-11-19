@@ -15,6 +15,8 @@ mod shapers;
 mod system_font_service;
 mod system_font_service_proxy;
 
+use std::sync::LazyLock;
+
 // These items are not meant to be part of the public API but are used for integration tests
 pub use font::{
     Font, FontBaseline, FontFamilyDescriptor, FontGroup, FontMetrics, FontRef, FontSearchScope,
@@ -34,6 +36,7 @@ pub(crate) use shapers::*;
 pub use system_font_service::SystemFontService;
 pub use system_font_service_proxy::SystemFontServiceProxy;
 use unicode_properties::{EmojiStatus, UnicodeEmoji, emoji};
+use unicode_script::Script;
 
 /// Whether or not font fallback selection prefers the emoji or text representation
 /// of a character. If `None` then either presentation is acceptable.
@@ -92,6 +95,17 @@ impl FallbackFontSelectionOptions {
             presentation_preference,
             language,
         }
+    }
+}
+
+/// Returns the Unicode script of `character`.
+pub fn script_for_char(character: char) -> Script {
+    // Called per character of text; Latin-1 skips the range search.
+    static LATIN1_SCRIPTS: LazyLock<[Script; 256]> =
+        LazyLock::new(|| std::array::from_fn(|byte| Script::from(char::from(byte as u8))));
+    match u8::try_from(character) {
+        Ok(byte) => LATIN1_SCRIPTS[usize::from(byte)],
+        Err(_) => Script::from(character),
     }
 }
 
