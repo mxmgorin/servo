@@ -11,7 +11,7 @@ use std::{iter, str};
 use app_units::Au;
 use atomic_refcell::AtomicRef;
 use bitflags::bitflags;
-use euclid::default::Rect;
+use euclid::default::{Rect, Vector2D};
 use euclid::num::Zero;
 use font_types::{BigEndian, NameId};
 use fonts_traits::tag::{CBDT, COLR, ITAL, SBIX, SLNT, WDTH, WGHT};
@@ -682,6 +682,23 @@ impl Font {
         let mut cache = self.cached_shape_data.write();
         cache.glyph_bounds.insert(glyph_id, bounds);
         bounds
+    }
+
+    /// Returns the union of the typographic bounds of `text`'s glyphs, each placed at its pen
+    /// position, or `None` if it has no glyphs. `text` must have been shaped by this font.
+    pub fn text_typographic_bounds(&self, text: &ShapedText) -> Option<Rect<f32>> {
+        *text.typographic_bounds.get_or_init(|| {
+            let mut advance = 0.0;
+            let mut bounds: Option<Rect<f32>> = None;
+            for glyph in text.glyphs() {
+                let glyph_bounds = self
+                    .typographic_bounds(glyph.id())
+                    .translate(Vector2D::new(advance, 0.0));
+                bounds = Some(bounds.map_or(glyph_bounds, |bounds| bounds.union(&glyph_bounds)));
+                advance += glyph.advance().to_f32_px();
+            }
+            bounds
+        })
     }
 
     /// Get the [`FontBaseline`] for this font.

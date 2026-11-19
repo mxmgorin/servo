@@ -4,11 +4,11 @@
 
 use std::fmt;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::vec::Vec;
 
 use app_units::Au;
-use euclid::default::Point2D;
+use euclid::default::{Point2D, Rect};
 use euclid::num::Zero;
 use itertools::Either;
 use log::{debug, error};
@@ -237,6 +237,11 @@ pub struct ShapedText {
     /// Whether or not this [`ShapedText`] has right-to-left text, which has implications
     /// about the order of the glyphs in the store.
     is_rtl: bool,
+
+    /// The union of the glyphs' typographic bounds, each at its pen position; `None` without
+    /// glyphs. Filled on first request.
+    #[ignore_malloc_size_of = "Plain data"]
+    pub(crate) typographic_bounds: OnceLock<Option<Rect<f32>>>,
 }
 
 impl ShapedText {
@@ -251,6 +256,7 @@ impl ShapedText {
             character_count: Utf32CodeUnits(0),
             total_word_separators: 0,
             is_rtl,
+            typographic_bounds: OnceLock::new(),
         }
     }
 
