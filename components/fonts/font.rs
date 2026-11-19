@@ -43,6 +43,7 @@ use style::values::computed::{
     FontFeatureSettings, FontStyle, FontSynthesis, FontVariantEastAsian, FontVariantLigatures,
     FontVariantNumeric, FontWeight,
 };
+use unicode_properties::emoji;
 use unicode_script::Script;
 use webrender_api::{
     FontInstanceFlags, FontInstanceKey, FontInstancePlatformOptions, FontVariation,
@@ -725,6 +726,15 @@ impl FallbackKey {
     }
 }
 
+/// The inputs of [`FontGroup::find_by_codepoint`]. Of the next character, only a presentation
+/// selector affects the choice.
+#[derive(Clone, Copy, Debug, Eq, Hash, MallocSizeOf, PartialEq)]
+struct CodepointKey {
+    codepoint: char,
+    presentation_selector: Option<char>,
+    language: Language,
+}
+
 /// A `FontGroup` is a prioritised list of fonts for a given set of font styles. It is used by
 /// `TextRun` to decide which font to render a character with. If none of the fonts listed in the
 /// styles are suitable, a fallback font may be used.
@@ -741,6 +751,8 @@ pub struct FontGroup {
     /// It's unclear if this is the right thing to do. Perhaps fallbacks should
     /// always be stored here as it's quite likely that they will be used again.
     fallbacks: RwLock<HashMap<FallbackKey, FontRef>>,
+    /// The font [`Self::find_by_codepoint`] chose for each set of inputs it was given.
+    codepoint_fonts: RwLock<FxHashMap<CodepointKey, Option<FontRef>>>,
 }
 
 impl FontGroup {
@@ -756,6 +768,7 @@ impl FontGroup {
             descriptor,
             families,
             fallbacks: Default::default(),
+            codepoint_fonts: Default::default(),
         }
     }
 
@@ -778,6 +791,34 @@ impl FontGroup {
             _ => codepoint,
         };
 
+        let key = CodepointKey {
+            codepoint,
+            presentation_selector: next_codepoint.filter(|next| {
+                emoji::is_emoji_presentation_selector(*next) ||
+                    emoji::is_text_presentation_selector(*next)
+            }),
+            language,
+        };
+        if let Some(font) = self.codepoint_fonts.read().get(&key) {
+            return font.clone();
+        }
+        let font = self.find_by_codepoint_uncached(
+            font_context,
+            codepoint,
+            key.presentation_selector,
+            language,
+        );
+        self.codepoint_fonts.write().insert(key, font.clone());
+        font
+    }
+
+    fn find_by_codepoint_uncached(
+        &self,
+        font_context: &FontContext,
+        codepoint: char,
+        next_codepoint: Option<char>,
+        language: Language,
+    ) -> Option<FontRef> {
         let options = FallbackFontSelectionOptions::new(codepoint, next_codepoint, language);
 
         let should_look_for_small_caps = self.descriptor.variant == font_variant_caps::T::SmallCaps &&
