@@ -239,6 +239,9 @@ pub struct Font {
     /// This is cached, because getting table data is expensive.
     has_color_bitmap_or_colr_table: OnceLock<bool>,
 
+    /// The baselines from this font's BASE table, read once.
+    baseline: OnceLock<Option<FontBaseline>>,
+
     /// The family name of the font.
     ///
     /// This is the name as it is declared in the `name` table, *not* the name provided by the system
@@ -344,6 +347,7 @@ impl Font {
             font_instance_key: Default::default(),
             synthesized_small_caps,
             has_color_bitmap_or_colr_table: OnceLock::new(),
+            baseline: OnceLock::new(),
             family_name: Default::default(),
         })
     }
@@ -593,6 +597,11 @@ impl Font {
 
     /// Get the [`FontBaseline`] for this font.
     pub fn baseline(&self) -> Option<FontBaseline> {
+        *self.baseline.get_or_init(|| self.read_baseline())
+    }
+
+    /// Reads the [`FontBaseline`] from this font's BASE table.
+    fn read_baseline(&self) -> Option<FontBaseline> {
         // Load the horizontal axis of the BASE table
         let base_table = self.skrifa_font().tables().base().ok()?;
         let horiz_axis = base_table.horiz_axis()?.ok()?;
@@ -1096,7 +1105,7 @@ impl FontFamilyDescriptor {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FontBaseline {
     pub ideographic_baseline: f32,
     pub alphabetic_baseline: f32,
