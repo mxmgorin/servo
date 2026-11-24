@@ -3207,6 +3207,12 @@ where
         };
         let viewport_details = browsing_context.viewport_details;
         let pipeline_id = browsing_context.pipeline_id;
+        let history_pipeline_ids: Vec<_> = browsing_context
+            .pipelines
+            .iter()
+            .copied()
+            .filter(|id| *id != pipeline_id)
+            .collect();
 
         let Some(pipeline) = self.pipelines.get(&pipeline_id) else {
             return warn!("failed pipeline is missing");
@@ -3217,6 +3223,11 @@ where
         let Some(old_load_data) = self.refresh_load_data(pipeline_id) else {
             return warn!("failed pipeline is missing");
         };
+
+        // A session history entry whose document closes without a discard cannot be traversed to.
+        for history_pipeline_id in history_pipeline_ids {
+            self.handle_discard_document(webview_id, history_pipeline_id);
+        }
 
         self.close_browsing_context_children(
             webview_id,
