@@ -120,6 +120,7 @@ use embedder_traits::{
 };
 use euclid::default::Size2D as UntypedSize2D;
 use fonts::SystemFontServiceProxy;
+use http::Method;
 use ipc_channel::router::ROUTER;
 use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
 use layout_api::{LayoutFactory, ScriptThreadFactory};
@@ -456,6 +457,10 @@ pub struct Constellation<STF, SWF> {
     /// for more details.)
     pipelines: FxHashMap<PipelineId, Pipeline>,
 
+    /// The load data of the page each crash page replaced, keyed by the crash page's
+    /// pipeline: a reload of the crash page loads that page again.
+    crash_page_reloads: FxHashMap<PipelineId, LoadData>,
+
     worker_animation_frame_providers: FxHashMap<WorkerId, WorkerAnimationFrameProvider>,
 
     /// The set of all the browsing contexts in the browser.
@@ -732,6 +737,7 @@ where
                     broadcast_channels: Default::default(),
                     pipeline_interests: Default::default(),
                     pipelines: Default::default(),
+                    crash_page_reloads: Default::default(),
                     worker_animation_frame_providers: Default::default(),
                     browsing_contexts: Default::default(),
                     next_pipeline_namespace_id: Cell::new(FIRST_CONTENT_PIPELINE_NAMESPACE_ID),
@@ -3099,6 +3105,7 @@ where
         let Some(pipeline) = self.pipelines.remove(&pipeline_id) else {
             return;
         };
+        self.crash_page_reloads.remove(&pipeline_id);
 
         self.stop_waiting_for_pending_service_worker_state_update(&pipeline_id);
 
@@ -3220,6 +3227,7 @@ where
         if old_load_data.crash.is_some() {
             return error!("crash page crashed");
         }
+        let crash_page_reload = old_load_data.clone();
 
         warn!("creating replacement pipeline for crash page");
 
@@ -3248,6 +3256,11 @@ where
             TargetSnapshotParams::default(),
             None,
         );
+
+        if self.pipelines.contains_key(&new_pipeline_id) {
+            self.crash_page_reloads
+                .insert(new_pipeline_id, crash_page_reload);
+        }
 
         let Some(webview) = self.webviews.get_mut(&webview_id) else {
             return warn!("Adding pending change to unknown WebView: {webview_id:?}");
@@ -5092,6 +5105,26 @@ where
                 return warn!("{}: Got reload event after closure", browsing_context_id);
             },
         };
+
+        // A crash page is sandboxed, and a reload from its document would sandbox the page too.
+        if let Some(load_data) = self.crash_page_reloads.get(&pipeline_id) {
+            let load_data = LoadData {
+                // As a reload from the document would be.
+                method: Method::GET,
+                data: None,
+                reload_navigation: true,
+                history_navigation: false,
+                ..load_data.clone()
+            };
+            self.load_url(
+                webview_id,
+                pipeline_id,
+                load_data,
+                NavigationHistoryBehavior::Replace,
+                TargetSnapshotParams::default(),
+            );
+            return;
+        }
 
         self.send_webdriver_load_status(webview_id, WebDriverLoadStatus::NavigationStart);
         if !self.send_message_to_pipeline(
