@@ -17,11 +17,13 @@
 //! a page runs its course and the script thread returns to processing events in the main event
 //! loop.
 
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::default::Default;
 use std::ops::ControlFlow;
 use std::option::Option;
+use std::panic::{self, AssertUnwindSafe};
 use std::rc::{Rc, Weak};
 use std::result::Result;
 use std::sync::Arc;
@@ -90,7 +92,7 @@ use servo_base::cross_process_instant::CrossProcessInstant;
 use servo_base::generic_channel::GenericSender;
 use servo_base::id::{
     BrowsingContextId, HistoryStateId, PipelineId, PipelineNamespace, ScriptEventLoopId,
-    ServiceWorkerId, WebViewId, WorkerId,
+    ServiceWorkerId, TEST_PIPELINE_ID, TEST_WEBVIEW_ID, WebViewId, WorkerId,
 };
 use servo_base::threadboost::{BoostAffinity, ThreadPriority};
 use servo_base::{Epoch, generic_channel};
@@ -103,10 +105,10 @@ use servo_constellation_traits::{
     HistoryTraversalSource, SessionHistoryTraversalRequest, TraversalDirection,
 };
 use servo_constellation_traits::{
-    LoadData, LoadOrigin, NavigationHistoryBehavior, PaintMetricEvent, RemoteFocusOperation,
-    ScreenshotReadinessResponse, ScriptToConstellationChan, ScriptToConstellationMessage,
-    ScrollStateUpdate, ServiceWorkerState, StructuredSerializedData, TargetSnapshotParams,
-    WindowSizeType,
+    LoadData, LoadOrigin, LogEntry, NavigationHistoryBehavior, PaintMetricEvent,
+    RemoteFocusOperation, ScreenshotReadinessResponse, ScriptToConstellationChan,
+    ScriptToConstellationMessage, ScriptToConstellationSender, ScrollStateUpdate,
+    ServiceWorkerState, StructuredSerializedData, TargetSnapshotParams, WindowSizeType,
 };
 use servo_url::{ImmutableOrigin, MutableOrigin, OriginSnapshot, ServoUrl};
 use smallvec::SmallVec;
@@ -526,13 +528,26 @@ impl ScriptThreadFactory for ScriptThread {
                     BoostAffinity::Boost,
                 );
                 let mut failsafe = ScriptMemoryFailsafe::new(&script_thread);
+                let constellation_sender = script_thread
+                    .senders
+                    .pipeline_to_constellation_sender
+                    .clone();
 
-                memory_profiler_sender.run_with_memory_reporting(
-                    || script_thread.start(&mut cx),
-                    reporter_name,
-                    ScriptEventLoopSender::MainThread(script_thread.senders.self_sender.clone()),
-                    CommonScriptMsg::CollectReports,
-                );
+                let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                    memory_profiler_sender.run_with_memory_reporting(
+                        || script_thread.start(&mut cx),
+                        reporter_name,
+                        ScriptEventLoopSender::MainThread(
+                            script_thread.senders.self_sender.clone(),
+                        ),
+                        CommonScriptMsg::CollectReports,
+                    )
+                }));
+                // The logger reports a panic only when the embedder installed Servo's.
+                if let Err(payload) = result {
+                    report_panic(&constellation_sender, script_thread_id, &*payload);
+                    panic::resume_unwind(payload);
+                }
 
                 // This must always be the very last operation performed before the thread completes
                 failsafe.neuter();
@@ -4831,4 +4846,28 @@ fn obtain_a_browsing_context(
     // Step 15. Return newBrowsingContext.
     // TODO
     Some(browsing_context)
+}
+
+/// Tells the constellation that the script thread `event_loop_id` panicked with `payload`.
+fn report_panic(
+    sender: &ScriptToConstellationSender,
+    event_loop_id: ScriptEventLoopId,
+    payload: &(dyn Any + Send),
+) {
+    let reason = payload
+        .downcast_ref::<&str>()
+        .map(|reason| reason.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "Box<dyn Any>".to_owned());
+    let thread_name = thread::current().name().map(ToOwned::to_owned);
+    // The ids are unused for a `LogEntry`.
+    let _ = sender.send((
+        TEST_WEBVIEW_ID,
+        TEST_PIPELINE_ID,
+        ScriptToConstellationMessage::LogEntry(
+            Some(event_loop_id),
+            thread_name,
+            LogEntry::Panic(reason, String::new()),
+        ),
+    ));
 }
